@@ -28,6 +28,14 @@ def get_training_parser(default_task='translation'):
     return parser
 
 
+def get_validation_mul_parser(default_task='translation'):
+    parser = get_parser('Validation', default_task)
+    add_dataset_args(parser, train=True)
+    add_distributed_training_args(parser)
+    group = parser.add_argument_group('Evaluation')
+    add_common_eval_args(group)
+    return parser    
+    
 def get_generation_parser(interactive=False, default_task='translation'):
     parser = get_parser('Generation', default_task)
     add_dataset_args(parser, gen=True)

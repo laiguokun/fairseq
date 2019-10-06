@@ -442,6 +442,10 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         x = self.output_layer(x)
         return x, extra
 
+    def get_hidden(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
+        x, extra = self.extract_features(prev_output_tokens, encoder_out, incremental_state)
+        return x
+
     def extract_features(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
         """
         Similar to *forward* but only return features.

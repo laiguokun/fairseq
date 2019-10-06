@@ -5,6 +5,8 @@
 
 import itertools
 import os
+import torch
+
 
 from fairseq import options, utils
 from fairseq.data import (
@@ -211,3 +213,24 @@ class TranslationTask(FairseqTask):
     def target_dictionary(self):
         """Return the target :class:`~fairseq.data.Dictionary`."""
         return self.tgt_dict
+
+    def get_hidden_step(self, sample, model, criterion):
+        model.eval()
+        with torch.no_grad():
+            hidden = model.get_hidden(**sample['net_input'])
+        sample_size = sample['target'].size(0) if self.args.sentence_avg else sample['ntokens']
+        logging_output = {
+            'loss': 0,
+            'nll_loss': 0,
+            'ntokens': sample['ntokens'],
+            'nsentences': sample['target'].size(0),
+            'sample_size': sample_size,
+        }
+        hidden = hidden.contiguous().view(-1, hidden.size(-1))
+        target = sample['target'].view(hidden.size(0), 1)
+        I = ~torch.eq(target, criterion.padding_idx)
+        I = I.squeeze(-1)
+        hidden = hidden[I,:]
+        target = target[I,:]
+        assert hidden.size(0) == sample['ntokens']
+        return (hidden, target), sample_size, logging_output
