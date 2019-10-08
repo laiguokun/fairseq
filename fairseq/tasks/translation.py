@@ -18,7 +18,7 @@ from fairseq.data import (
 )
 
 from . import FairseqTask, register_task
-
+import torch.nn.functional as F
 
 def load_langpair_dataset(
     data_path, split,
@@ -129,7 +129,7 @@ class TranslationTask(FairseqTask):
                             help='load the dataset lazily')
         parser.add_argument('--raw-text', action='store_true',
                             help='load raw text dataset')
-        parser.add_argument('--load-alignments', action='store_true',
+        parser.add_argument('--load-alignments', action='store_true', default=False,
                             help='load the binarized alignments')
         parser.add_argument('--left-pad-source', default='True', type=str, metavar='BOOL',
                             help='pad the source on the left')
@@ -224,7 +224,35 @@ class TranslationTask(FairseqTask):
         """Return the target :class:`~fairseq.data.Dictionary`."""
         return self.tgt_dict
 
-    def get_hidden_step(self, sample, model, criterion):
+    def valid_knn_step(self, sample, model, criterion, knnp_func, lamb):
+        model.eval()
+        with torch.no_grad():
+            hidden = model.get_hidden(**sample['net_input'])  
+            knnp = knnp_func(hidden)
+            logit = model.decoder.output_layer(hidden)
+            logit = logit.view(-1, logit.size(-1))
+            p = torch.softmax(logit, -1)
+            p = lamb * knnp + (1-lamb) * p
+            lprobs = torch.log(p)
+            target = sample['target'].view(-1)
+            reduce=True
+            loss = F.nll_loss(
+                lprobs,
+                target,
+                ignore_index=criterion.padding_idx,
+                reduction='sum' if reduce else 'none',
+            )
+            sample_size = sample['target'].size(0) if self.args.sentence_avg else sample['ntokens']
+            logging_output = {
+                'loss': utils.item(loss.data) if reduce else loss.data,
+                'nll_loss': utils.item(loss.data) if reduce else loss.data,
+                'ntokens': sample['ntokens'],
+                'nsentences': sample['target'].size(0),
+                'sample_size': sample_size,
+            }
+        return loss, sample_size, logging_output
+
+    def get_hidden_step(self, sample, model, criterionm):
         model.eval()
         with torch.no_grad():
             hidden = model.get_hidden(**sample['net_input'])
@@ -244,3 +272,7 @@ class TranslationTask(FairseqTask):
         target = target[I,:]
         assert hidden.size(0) == sample['ntokens']
         return (hidden, target), sample_size, logging_output
+
+    def inference_knn_step(self, generator, models, sample, knnp_func, lamb, prefix_tokens=None):
+        with torch.no_grad():
+            return generator.generate(models, sample, prefix_tokens=prefix_tokens, knnp_func=knnp_func, lamb=lamb)
