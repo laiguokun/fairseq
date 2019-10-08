@@ -311,8 +311,8 @@ def validate(args, trainer, task, subsets):
                     continue
                 extra_meters[k].update(v)
             cnt += 1
-            #if (cnt > 10):
-            #    break
+            if (cnt > 10):
+                break
         # log validation stats
         fout_hidden.close()
         fout_target.close()

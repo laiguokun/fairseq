@@ -35,7 +35,7 @@ def get_validation_mul_parser(default_task='translation'):
     group = parser.add_argument_group('Evaluation')
     add_common_eval_args(group)
     return parser    
-    
+
 def get_generation_parser(interactive=False, default_task='translation'):
     parser = get_parser('Generation', default_task)
     add_dataset_args(parser, gen=True)
@@ -59,6 +59,7 @@ def get_eval_lm_parser(default_task='language_modeling'):
 def get_validation_parser(default_task=None):
     parser = get_parser('Validation', default_task)
     add_dataset_args(parser, train=True)
+    add_eval_knn_args(parser)
     group = parser.add_argument_group('Evaluation')
     add_common_eval_args(group)
     return parser
@@ -452,6 +453,12 @@ def add_eval_lm_args(parser):
                             ' in order to fit into GPU memory')
     # fmt: on
 
+def add_eval_knn_args(parser):
+    group = parser.add_argument_group('knn Evaluation')
+    # fmt: off
+    group.add_argument('--lamb', default=0.1, type=float)
+    group.add_argument('--topk', default=128, type=int)
+    # fmt: on
 
 def add_generation_args(parser):
     group = parser.add_argument_group('Generation')
