@@ -228,12 +228,15 @@ class TranslationTask(FairseqTask):
         model.eval()
         with torch.no_grad():
             hidden = model.get_hidden(**sample['net_input'])  
-            knnp = knnp_func(hidden)
             logit = model.decoder.output_layer(hidden)
             logit = logit.view(-1, logit.size(-1))
-            p = torch.softmax(logit, -1)
-            p = lamb * knnp + (1-lamb) * p
-            lprobs = torch.log(p)
+            if lamb > 0:
+                knnp = knnp_func(hidden)
+                p = torch.softmax(logit, -1)
+                p = lamb * knnp + (1-lamb) * p
+                lprobs = torch.log(p)
+            else:
+                lprobs = F.log_softmax(logit, -1)
             target = sample['target'].view(-1)
             reduce=True
             loss = F.nll_loss(

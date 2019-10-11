@@ -289,10 +289,9 @@ class SequenceGenerator(object):
                     corr = batch_idxs - torch.arange(batch_idxs.numel()).type_as(batch_idxs)
                     reorder_state.view(-1, beam_size).add_(corr.unsqueeze(-1) * beam_size)
                 model.reorder_incremental_state(reorder_state)
-                encoder_outs = model.reorder_encoder_out(encoder_outs, reorder_state)
-
+                encoder_outs = model.reorder_encoder_out(encoder_outs, reorder_state)        
             lprobs, avg_attn_scores = model.forward_decoder(
-                tokens[:, :step + 1], encoder_outs, temperature=self.temperature,
+                tokens[:, :step + 1], encoder_outs, temperature=self.temperature, **kwargs
             )
 
             lprobs[:, self.pad] = -math.inf  # never select pad
@@ -540,7 +539,7 @@ class EnsembleModel(torch.nn.Module):
         return [model.encoder(**encoder_input) for model in self.models]
 
     @torch.no_grad()
-    def forward_decoder(self, tokens, encoder_outs, temperature=1.):
+    def forward_decoder(self, tokens, encoder_outs, temperature=1., **kwargs):
         if len(self.models) == 1:
             return self._decode_one(
                 tokens,
@@ -549,6 +548,7 @@ class EnsembleModel(torch.nn.Module):
                 self.incremental_states,
                 log_probs=True,
                 temperature=temperature,
+                **kwargs,
             )
 
         log_probs = []
@@ -575,24 +575,49 @@ class EnsembleModel(torch.nn.Module):
 
     def _decode_one(
         self, tokens, model, encoder_out, incremental_states, log_probs,
-        temperature=1.,
+        temperature=1., **kwargs
     ):
-        if self.incremental_states is not None:
-            decoder_out = list(model.forward_decoder(
-                tokens, encoder_out=encoder_out, incremental_state=self.incremental_states[model],
-            ))
+        if 'knnp_func' in kwargs:
+            knnp_func = kwargs['knnp_func']
+            lamb = kwargs['lamb']
+            if self.incremental_states is not None:
+                hidden, extra = model.decoder(tokens, encoder_out=encoder_out, 
+                    features_only=True, incremental_state=self.incremental_states[model])
+            else:
+                hidden, extra = model.decoder(tokens, encoder_out=encoder_out, 
+                    features_only=True)
+            attn = extra.get('attn', None)
+            if attn is not None:
+                attn = attn[:, -1, :].contiguous()
+            bsz, qlen, _ = hidden.size()
+            knnp = knnp_func(hidden)
+            knnp = knnp.view(bsz, qlen, knnp.size(-1))
+            logit = model.decoder.output_layer(hidden)
+            p = torch.softmax(logit, -1)
+            p = lamb * knnp + (1-lamb) * p
+            lprobs = torch.log(p)
+            lprobs = lprobs[:, -1, :]
+            if temperature != 1.:
+                lprobs = lprobs.div_(temperature)
+                lprobs = F.log_softmax(lprobs)
+            probs = lprobs.contiguous()
         else:
-            decoder_out = list(model.forward_decoder(tokens, encoder_out=encoder_out))
-        decoder_out[0] = decoder_out[0][:, -1:, :]
-        if temperature != 1.:
-            decoder_out[0].div_(temperature)
-        attn = decoder_out[1]
-        if type(attn) is dict:
-            attn = attn.get('attn', None)
-        if attn is not None:
-            attn = attn[:, -1, :]
-        probs = model.get_normalized_probs(decoder_out, log_probs=log_probs)
-        probs = probs[:, -1, :]
+            if self.incremental_states is not None:
+                decoder_out = list(model.forward_decoder(
+                    tokens, encoder_out=encoder_out, incremental_state=self.incremental_states[model],
+                ))
+            else:
+                decoder_out = list(model.forward_decoder(tokens, encoder_out=encoder_out))
+            decoder_out[0] = decoder_out[0][:, -1:, :]
+            if temperature != 1.:
+                decoder_out[0].div_(temperature)
+            attn = decoder_out[1]
+            if type(attn) is dict:
+                attn = attn.get('attn', None)
+            if attn is not None:
+                attn = attn[:, -1, :]
+            probs = model.get_normalized_probs(decoder_out, log_probs=log_probs)
+            probs = probs[:, -1, :]
         return probs, attn
 
     def reorder_encoder_out(self, encoder_outs, new_order):
