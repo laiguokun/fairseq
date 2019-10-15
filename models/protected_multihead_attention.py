@@ -5,6 +5,8 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 
+import math
+
 import torch
 from torch import nn
 from torch.nn import Parameter
@@ -14,7 +16,7 @@ from fairseq import utils
 from fairseq.modules.learned_positional_embedding import LearnedPositionalEmbedding
 
 # Adapted from faiserq/modules/multihead_attention to deal with local attention
-# Local attetion masking in combination with padding masking can lead to 
+# Local attetion masking in combination with padding masking can lead to
 # all -Inf attention rows. This version detects and corrects this situation
 class ProtectedMultiheadAttention(nn.Module):
     """Multi-headed attention.
@@ -285,6 +287,74 @@ def ProtectedPositionalEmbedding(
         )
     return m
 
+
+# class SinusoidalPositionalEmbedding(nn.Module):
+#     """This module produces sinusoidal positional embeddings of any length.
+#
+#     Padding symbols are ignored.
+#     """
+#
+#     def __init__(self, embedding_dim, padding_idx, init_size=1024):
+#         super().__init__()
+#         self.embedding_dim = embedding_dim
+#         self.padding_idx = padding_idx
+#         self.weights = SinusoidalPositionalEmbedding.get_embedding(
+#             init_size,
+#             embedding_dim,
+#         )
+#         self.onnx_trace = False
+#         self.register_buffer('_float_tensor', torch.FloatTensor(1))
+#
+#     def prepare_for_onnx_export_(self):
+#         self.onnx_trace = True
+#
+#     @staticmethod
+#     def get_embedding(num_embeddings, embedding_dim):
+#         """Build sinusoidal embeddings.
+#
+#         This matches the implementation in tensor2tensor, but differs slightly
+#         from the description in Section 3.5 of "Attention Is All You Need".
+#         """
+#         assert embedding_dim % 2 == 0
+#         pos_seq = torch.arange(0, num_embeddings, 1.0, dtype=torch.float)
+#         freq_seq = torch.arange(0, embedding_dim, 2.0, dtype=torch.float)
+#         inv_freq = 1. / (10000 ** (freq_seq / embedding_dim))
+#         sinusoidal_inp = torch.einsum("i, d-> id", pos_seq, inv_freq)
+#         emb = torch.cat([torch.sin(sinusoidal_inp), torch.cos(sinusoidal_inp)], -1)
+#         return emb
+#
+#     def forward(self, input_, incremental_state=None, timestep=None, **kwargs):
+#         """Input is expected to be of size [bsz x seqlen]."""
+#         bsz, seq_len = torch.onnx.operators.shape_as_tensor(input_)
+#         if (seq_len > self.weights.size(0)):
+#             self.weights = SinusoidalPositionalEmbedding.get_embedding(
+#                 seq_len,
+#                 embedding_dim,
+#             )
+#         self.weights = self.weights.to(self._float_tensor)
+#         if incremental_state is not None:
+#             # positions is the same for every token when decoding a single step
+#             pos = timestep.view(-1)[0] + 1 if timestep is not None else seq_len
+#             if self.onnx_trace:
+#                 return self.weights.index_select(index=pos, dim=0).unsqueeze(1).repeat(bsz, 1, 1)
+#             return self.weights[pos, :].expand(bsz, 1, -1)
+#
+#         weights = self.weights
+#         #get positions
+#         mask = input_.ne(self.padding_idx)
+#         positions = mask.cumsum(-1) - 1
+#         positions = positions * mask.long()
+#         positions = positions.view(-1, )
+#         weights = torch.index_select(weights, 0, positions)
+#         weights = weights.view(bsz, seq_len, -1)
+#         weights = weights * mask.unsqueeze(-1).type_as(weights)
+#         return weights
+#
+#     def max_positions(self):
+#         """Maximum number of supported positions."""
+#         return int(1e5)  # an arbitrary large number
+
+
 class SinusoidalPositionalEmbedding(nn.Module):
     """This module produces sinusoidal positional embeddings of any length.
 
@@ -312,41 +382,61 @@ class SinusoidalPositionalEmbedding(nn.Module):
         This matches the implementation in tensor2tensor, but differs slightly
         from the description in Section 3.5 of "Attention Is All You Need".
         """
-        assert embedding_dim % 2 == 0
-        pos_seq = torch.arange(0, num_embeddings, 1.0, dtype=torch.float)
-        freq_seq = torch.arange(0, embedding_dim, 2.0, dtype=torch.float)
-        inv_freq = 1. / (10000 ** (freq_seq / embedding_dim))
-        sinusoidal_inp = torch.einsum("i, d-> id", pos_seq, inv_freq)
-        emb = torch.cat([torch.sin(sinusoidal_inp), torch.cos(sinusoidal_inp)], -1)
+        half_dim = embedding_dim // 2
+        # emb = math.log(10000) / (half_dim - 1)
+        emb = math.log(10000) / half_dim
+        emb = torch.exp(torch.arange(half_dim, dtype=torch.float) * -emb)
+        emb = torch.arange(num_embeddings, dtype=torch.float).unsqueeze(1) * emb.unsqueeze(0)
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1).view(num_embeddings, -1)
+        if embedding_dim % 2 == 1:
+            # zero pad
+            emb = torch.cat([emb, torch.zeros(num_embeddings, 1)], dim=1)
         return emb
 
-    def forward(self, input_, incremental_state=None, timestep=None, **kwargs):
+    def forward(self, input, incremental_state=None, timestep=None, **kwargs):
         """Input is expected to be of size [bsz x seqlen]."""
-        bsz, seq_len = torch.onnx.operators.shape_as_tensor(input_)
-        if (seq_len > self.weights.size(0)):
+        bsz, seq_len = torch.onnx.operators.shape_as_tensor(input)
+        max_pos = seq_len
+        if self.weights is None or max_pos > self.weights.size(0):
+            # recompute/expand embeddings if needed
             self.weights = SinusoidalPositionalEmbedding.get_embedding(
-                seq_len,
-                embedding_dim,
+                max_pos,
+                self.embedding_dim,
             )
         self.weights = self.weights.to(self._float_tensor)
+
         if incremental_state is not None:
             # positions is the same for every token when decoding a single step
             pos = timestep.view(-1)[0] + 1 if timestep is not None else seq_len
             if self.onnx_trace:
-                return self.weights.index_select(index=pos, dim=0).unsqueeze(1).repeat(bsz, 1, 1)
-            return self.weights[pos, :].expand(bsz, 1, -1)
+                return self.weights.index_select(index=-1 + pos, dim=0).unsqueeze(1).repeat(bsz, 1, 1)
+            return self.weights[-1 + pos, :].expand(bsz, 1, -1)
 
-        weights = self.weights
-        #get positions
-        mask = input_.ne(self.padding_idx)
-        positions = mask.cumsum(-1) - 1
-        positions = positions * mask.long()
-        positions = positions.view(-1, )
-        weights = torch.index_select(weights, 0, positions)
-        weights = weights.view(bsz, seq_len, -1)
-        weights = weights * mask.unsqueeze(-1).type_as(weights)
-        return weights
+        positions = make_positions(input, self.padding_idx, onnx_trace=self.onnx_trace)
+        if self.onnx_trace:
+            flat_embeddings = self.weights.detach().index_select(0, positions.view(-1))
+            embedding_shape = torch.cat((bsz.view(1), seq_len.view(1), torch.LongTensor([-1])))
+            embeddings = torch.onnx.operators.reshape_from_tensor_shape(flat_embeddings, embedding_shape)
+            return embeddings
+        return self.weights.index_select(0, positions.view(-1)).view(bsz, seq_len, -1).detach()
 
     def max_positions(self):
         """Maximum number of supported positions."""
         return int(1e5)  # an arbitrary large number
+
+
+def make_positions(tensor, padding_idx, onnx_trace=False):
+    """Replace non-padding symbols with their position numbers.
+
+    Position numbers begin at padding_idx+1. Padding symbols are ignored.
+    """
+    # The series of casts and type-conversions here are carefully
+    # balanced to both work with ONNX export and XLA. In particular XLA
+    # prefers ints, cumsum defaults to output longs, and ONNX doesn't know
+    # how to handle the dtype kwarg in cumsum.
+    mask = tensor.ne(padding_idx).int()
+    return (
+        (torch.cumsum(mask, dim=1) - 1).type_as(mask) * mask
+    ).long()
+
+
