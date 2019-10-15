@@ -179,10 +179,9 @@ class JointAttentionEncoder(FairseqEncoder):
         """
         # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(src_tokens)
-
         if self.embed_positions is not None:
-            x += self.embed_positions(src_tokens)
-
+            pos_emb = self.embed_positions(src_tokens)
+            x += pos_emb
         # language embedding
         if self.embed_language is not None:
             lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
@@ -404,7 +403,6 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
             x = F.linear(x, self.embed_out)
 
         pred = x
-        print(x[0][0])
         info = {'attn': attn, 'inner_states': inner_states}
 
         return pred, info
