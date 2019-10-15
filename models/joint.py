@@ -16,7 +16,8 @@ from fairseq.models import (
     FairseqIncrementalDecoder, FairseqEncoder, FairseqModel, register_model, register_model_architecture
 )
 
-from .protected_multihead_attention import ProtectedMultiheadAttention, ProtectedPositionalEmbedding
+from .protected_multihead_attention import ProtectedMultiheadAttention#, ProtectedPositionalEmbedding
+from fairseq.modules import PositionalEmbedding as ProtectedPositionalEmbedding
 
 @register_model('joint_attention')
 class JointAttentionModel(FairseqModel):
