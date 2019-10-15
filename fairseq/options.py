@@ -425,6 +425,8 @@ def add_checkpoint_args(parser):
                        help='metric to use for saving "best" checkpoints')
     group.add_argument('--maximize-best-checkpoint-metric', action='store_true',
                        help='select the largest metric value for saving "best" checkpoints')
+    group.add_argument('--snap_model_file', type=str, default='None',
+                       help='load model from a snapshot')                      
     # fmt: on
     return group
 

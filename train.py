@@ -65,6 +65,11 @@ def main(args, init_distributed=False):
         args.max_sentences,
     ))
 
+    # load model from snapshot
+    if args.snap_model_file != 'None':
+        print('load model file from {}'.format(args.snap_model_file))
+        trainer.load_model_only(args.snap_model_file)
+
     # Load the latest checkpoint if one is available and restore the
     # corresponding train iterator
     extra_state, epoch_itr = checkpoint_utils.load_checkpoint(args, trainer)
