@@ -158,6 +158,10 @@ class Trainer(object):
                 self.optimizer, self.lr_scheduler, self.get_num_updates(),
                 self._optim_history, extra_state,
             )
+            
+    def load_model_only(self, filename):
+        state = torch.load(filename)
+        self.get_model().load_state_dict(state)
 
     def load_checkpoint(
         self,
