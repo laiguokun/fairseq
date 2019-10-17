@@ -426,7 +426,9 @@ def add_checkpoint_args(parser):
     group.add_argument('--maximize-best-checkpoint-metric', action='store_true',
                        help='select the largest metric value for saving "best" checkpoints')
     group.add_argument('--snap_model_file', type=str, default='None',
-                       help='load model from a snapshot')                      
+                       help='load model from a snapshot')  
+    group.add_argument('--only_convert', action='store_true',
+                       help='transfer a model file to a fairseq checkpoint')                     
     # fmt: on
     return group
 

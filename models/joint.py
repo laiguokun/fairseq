@@ -81,6 +81,8 @@ class JointAttentionModel(FairseqModel):
                             help='list of kernel size (default: None)')
         parser.add_argument('--language-embeddings', action='store_true',
                             help='use language embeddings')
+        parser.add_argument('--softmax_bias', action='store_true', default=False, 
+                            help='softmax_bias')            
 
     @classmethod
     def build_model(cls, args, task):
@@ -284,6 +286,9 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
         self.normalize = args.decoder_normalize_before and final_norm
         if self.normalize:
             self.layer_norm = LayerNorm(embed_dim)
+        self.has_softmax_bias = args.softmax_bias
+        if args.softmax_bias:
+            self.softmax_bias = nn.Parameter(torch.Tensor(len(dictionary),))
 
     def forward(self, prev_output_tokens, encoder_out, incremental_state=None):
         """
@@ -401,9 +406,15 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
 
         # project back to size of vocabulary
         if self.share_input_output_embed:
-            x = F.linear(x, self.embed_tokens.weight)
+            if self.has_softmax_bias:
+                x = F.linear(x, self.embed_tokens.weight, self.softmax_bias)
+            else:
+                x = F.linear(x, self.embed_tokens.weight)
         else:
-            x = F.linear(x, self.embed_out)
+            if self.has_sofmtax_bias:
+                x = F.linear(x, self.embed_out, self.softmax_bias)
+            else:
+                x = F.linear(x, self.embed_out)
 
         pred = x
         info = {'attn': attn, 'inner_states': inner_states}
@@ -514,9 +525,15 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
 
         # project back to size of vocabulary
         if self.share_input_output_embed:
-            x = F.linear(x, self.embed_tokens.weight)
+            if self.has_softmax_bias:
+                x = F.linear(x, self.embed_tokens.weight, self.softmax_bias)
+            else:
+                x = F.linear(x, self.embed_tokens.weight)
         else:
-            x = F.linear(x, self.embed_out)
+            if self.has_sofmtax_bias:
+                x = F.linear(x, self.embed_out, self.softmax_bias)
+            else:
+                x = F.linear(x, self.embed_out)
 
         pred = x
 

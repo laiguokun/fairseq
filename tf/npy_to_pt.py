@@ -1,5 +1,6 @@
 from collections import OrderedDict
 import torch
+import sys
 def convert_to_tensor(x, idx=None):
     if idx is None:
         return torch.FloatTensor(x['weight'])
@@ -54,8 +55,10 @@ for layer_id in range(14):
             convert_to_tensor(tf_model['model/transformer/layer_{}/ff/layer_{}/kernel'.format(layer_id, i)]).t()
         new_model['decoder.layers.{}.fc{}.bias'.format(layer_id, i)] = \
             convert_to_tensor(tf_model['model/transformer/layer_{}/ff/layer_{}/bias'.format(layer_id, i)])
+if 'model/lm_loss/bias' in tf_model:
+  new_model['decoder.softmax_bias'] = convert_to_tensor(tf_model['model/lm_loss/bias'])[:-1]
 new_model['encoder.version'] = torch.FloatTensor([2.])
 new_model['decoder.version'] = torch.FloatTensor([2.])
 new_model['decoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
 new_model['encoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
-torch.save(new_model, './model.pt')
+torch.save(new_model, sys.argv[1])

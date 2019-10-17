@@ -10,6 +10,7 @@ Train a new model on one or across multiple GPUs.
 import collections
 import math
 import random
+import os
 
 import numpy as np
 import torch
@@ -69,7 +70,11 @@ def main(args, init_distributed=False):
     if args.snap_model_file != 'None':
         print('load model file from {}'.format(args.snap_model_file))
         trainer.load_model_only(args.snap_model_file)
-
+        if args.only_convert:
+            state = {'args': args, 'model': trainer.get_model().state_dict()}
+            path = os.path.join('checkpoints', args.snap_model_file.split('/')[-1])
+            torch.save(state, path)
+            exit()
     # Load the latest checkpoint if one is available and restore the
     # corresponding train iterator
     extra_state, epoch_itr = checkpoint_utils.load_checkpoint(args, trainer)

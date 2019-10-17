@@ -249,8 +249,8 @@ def save_state(
 
 def _upgrade_state_dict(state):
     """Helper for upgrading old model checkpoints."""
+    return state
     from fairseq import models, registry, tasks
-
     # add optimizer_history
     if 'optimizer_history' not in state:
         state['optimizer_history'] = [
