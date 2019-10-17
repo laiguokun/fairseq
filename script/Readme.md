@@ -5,7 +5,7 @@
 Use the en_de_pretrain as the example
 ```
 cd tf
-bash convert.sh en_de_pretrain/model.ckpt-0
+bash convert.sh en_de_pretrain/model.ckpt-0 en_de_pretrain.pt
 ```
 
 ### eval the model
