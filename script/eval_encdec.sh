@@ -10,7 +10,6 @@ DEFINE_string 'gpu' '0' 'use which gpu' 'g'
 DEFINE_string 'l' '6' 'layer_num' 'l'
 DEFINE_string 'dim' '1024' 'hidden_dim' 'd'
 DEFINE_string 'a' '16' 'head_num' 'a'
-
 # parse the command-line
 FLAGS "$@" || exit $?
 eval set -- "${FLAGS_ARGV}"
@@ -24,7 +23,7 @@ if [ "${FLAGS_bias}" = "False" ]; then
   CUDA_VISIBLE_DEVICES= python train.py \
       data-bin/wmt16_en_de_bpe32k \
       --user-dir models \
-      --arch joint_attention_wmt_en_de_big \
+      --arch transformer_wmt_en_de_big --language-embedding \
       --log-interval 100 --no-progress-bar \
       --max-update 30000 --share-all-embeddings --optimizer adam \
       --adam-betas '(0.9, 0.98)' \
@@ -46,7 +45,7 @@ else
   CUDA_VISIBLE_DEVICES= python train.py \
       data-bin/wmt16_en_de_bpe32k \
       --user-dir models \
-      --arch joint_attention_wmt_en_de_big \
+      --arch transformer_wmt_en_de_big --language-embedding \
       --log-interval 100 --no-progress-bar \
       --max-update 30000 --share-all-embeddings --optimizer adam \
       --adam-betas '(0.9, 0.98)' \
@@ -58,12 +57,12 @@ else
       --lr-shrink 1 --max-lr 0.0009 --lr 1e-7 --min-lr 1e-9 --warmup-init-lr 1e-07 \
       --t-mult 1 --lr-period-updates 20000 \
       --snap_model_file ./tf/$model.pt \
+      --softmax_bias \
+      --only_convert \
       --encoder-attention-heads $a --decoder-attention-heads $a \
       --encoder-embed-dim $h --decoder-embed-dim $h \
       --encoder-ffn-embed-dim $ffn_h --decoder-ffn-embed-dim $ffn_h \
       --encoder-layers $l --decoder-layers $l \
-      --softmax_bias \
-      --only_convert \
       --save-dir ./save/$model
 fi
 
@@ -83,6 +82,6 @@ CUDA_VISIBLE_DEVICES=$gpu python generate.py \
     --task translation --dataset-impl mmap\
     --path checkpoints/$model.pt --max-tokens 4000\
     --user-dir models \
-    --beam 5 --remove-bpe --lenpen 0.35 --gen-subset test > wmt16_gen.txt
+    --beam 5 --remove-bpe --lenpen 0.6 --gen-subset test > wmt16_gen.txt
     
 bash ./scripts/compound_split_bleu.sh wmt16_gen.txt

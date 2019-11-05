@@ -29,6 +29,11 @@ from fairseq.modules import (
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
+def LanguageEmbedding(embedding_dim):
+    m = nn.Parameter(torch.Tensor(embedding_dim))
+    nn.init.normal_(m, mean=0, std=embedding_dim ** -0.5)
+    return m
+
 
 @register_model('transformer')
 class TransformerModel(FairseqEncoderDecoderModel):
@@ -130,6 +135,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='perform cross+self-attention')
         parser.add_argument('--layer-wise-attention', default=False, action='store_true',
                             help='perform layer-wise attention (cross-attention or cross+self-attention)')
+        parser.add_argument('--language-embedding', default=False, action='store_true')
+        parser.add_argument('--softmax-bias', default=False, action='store_true')
         # fmt: on
 
     @classmethod
@@ -299,12 +306,20 @@ class TransformerEncoder(FairseqEncoder):
             self.layer_norm = LayerNorm(embed_dim)
         else:
             self.layer_norm = None
+        
+        if args.language_embedding:
+            self.embed_language = LanguageEmbedding(embed_dim) 
+        else:
+            self.embed_language = None
 
     def forward_embedding(self, src_tokens):
         # embed tokens and positions
         embed = self.embed_scale * self.embed_tokens(src_tokens)
         if self.embed_positions is not None:
             x = embed + self.embed_positions(src_tokens)
+        if self.embed_language is not None:
+            lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
+            x += lang_emb
         x = F.dropout(x, p=self.dropout, training=self.training)
         return x, embed
 
@@ -487,6 +502,16 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         else:
             self.layer_norm = None
 
+        if args.language_embedding:
+            self.embed_language = LanguageEmbedding(embed_dim) 
+        else:
+            self.embed_language = None
+
+        if args.softmax_bias:
+            self.softmax_bias = nn.Parameter(torch.Tensor(len(dictionary),))
+        else:
+            self.softmax_bias = None
+
     def forward(
         self,
         prev_output_tokens,
@@ -573,6 +598,11 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
         if positions is not None:
             x += positions
+        
+        if self.embed_language is not None:
+            lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
+            x += lang_emb
+
         x = F.dropout(x, p=self.dropout, training=self.training)
 
         # B x T x C -> T x B x C
@@ -636,9 +666,18 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         if self.adaptive_softmax is None:
             # project back to size of vocabulary
             if self.share_input_output_embed:
-                return F.linear(features, self.embed_tokens.weight)
+                if self.softmax_bias is not None:
+                    return F.linear(
+                        features, 
+                        self.embed_tokens.weight, 
+                        self.softmax_bias)
+                else:
+                    return F.linear(features, self.embed_tokens.weight)
             else:
-                return F.linear(features, self.embed_out)
+                if self.softmax_bias is not None:
+                    return F.linear(features, self.embed_out, self.softmax_bias)
+                else:
+                    return F.linear(features, self.embed_out)
         else:
             return features
 

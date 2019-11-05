@@ -6,7 +6,7 @@
 # define a 'name' command-line string flag
 DEFINE_string 'out' '' 'output_file' 'o'
 DEFINE_string 'inp' '' 'input_folder' 'i'
-DEFINE_string 'l' '14' 'layer_num' 'l'
+DEFINE_string 'l' '6' 'layer_num' 'l'
 DEFINE_string 'dim' '1024' 'hidden_dim' 'd'
 # parse the command-line
 FLAGS "$@" || exit $?

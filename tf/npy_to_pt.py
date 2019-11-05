@@ -21,11 +21,12 @@ new_model['encoder.embed_tokens.weight'] = \
 new_model['decoder.embed_tokens.weight'] = \
     convert_to_tensor(tf_model['model/input/word_embedding/lookup_table'])[:-1]
 
-for layer_id in range(14):
+for layer_id in range(int(sys.argv[2])):
+    d = sys.argv[3]
     #qkv proj
-    q = convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/q/kernel'.format(layer_id)]).view(1024, -1)
-    k = convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/k/kernel'.format(layer_id)]).view(1024, -1)
-    v = convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/v/kernel'.format(layer_id)]).view(1024, -1)
+    q = convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/q/kernel'.format(layer_id)]).view(d, -1)
+    k = convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/k/kernel'.format(layer_id)]).view(d, -1)
+    v = convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/v/kernel'.format(layer_id)]).view(d, -1)
     #print(q.size())
     in_proj_weight = torch.cat([q,k,v],-1).t()
     #qkv bias
@@ -37,7 +38,7 @@ for layer_id in range(14):
     new_model['decoder.layers.{}.self_attn.in_proj_bias'.format(layer_id)] = in_proj_bias
     #output proj
     new_model['decoder.layers.{}.self_attn.out_proj.weight'.format(layer_id)] = \
-        convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/o/kernel'.format(layer_id)]).view(1024, -1)
+        convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/o/kernel'.format(layer_id)]).view(d, -1)
     new_model['decoder.layers.{}.self_attn.out_proj.bias'.format(layer_id)] = \
         convert_to_tensor(tf_model['model/transformer/layer_{}/abs_attn/o/bias'.format(layer_id)])
     #layer_norm
