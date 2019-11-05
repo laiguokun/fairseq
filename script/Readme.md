@@ -19,7 +19,7 @@ bash eval.sh -m en_de_pretrain -b True (-l 14 -d 1024)
 
 ### convert the tf mdoel to pytorch model
 
-Use the en_de_pretrain as the example
+Use the ende_nobias_L12H768A12 as the example
 ```
 cd tf
 bash convert_encdec.sh -i ende_nobias_L12H768A12 -o ende_nobias_L12H768A12.pt (-l 12 -d 768)
@@ -29,5 +29,5 @@ bash convert_encdec.sh -i ende_nobias_L12H768A12 -o ende_nobias_L12H768A12.pt (-
 
 ```
 cd ..
-bash eval.sh -m ende_nobias_L12H768A12 -l 12 -d 768 -a 12
+bash eval_encdec.sh -m ende_nobias_L12H768A12 -l 12 -d 768 -a 12
 ```
