@@ -36,10 +36,10 @@ if [ "${FLAGS_bias}" = "False" ]; then
       --lr-shrink 1 --max-lr 0.0009 --lr 1e-7 --min-lr 1e-9 --warmup-init-lr 1e-07 \
       --t-mult 1 --lr-period-updates 20000 \
       --snap_model_file ./tf/$model.pt \
-      --encoder-attention-heads $a --decoder-attention-heads $a \
+      --decoder-attention-heads $a \
       --encoder-embed-dim $h --decoder-embed-dim $h \
-      --encoder-ffn-embed-dim $ffn_h --decoder-ffn-embed-dim $ffn_h \
-      --encoder-layers $l --decoder-layers $l \
+      --decoder-ffn-embed-dim $ffn_h \
+      --decoder-layers $l \
       --only_convert \
       --save-dir ./save/$model
 else
@@ -58,10 +58,10 @@ else
       --lr-shrink 1 --max-lr 0.0009 --lr 1e-7 --min-lr 1e-9 --warmup-init-lr 1e-07 \
       --t-mult 1 --lr-period-updates 20000 \
       --snap_model_file ./tf/$model.pt \
-      --encoder-attention-heads $a --decoder-attention-heads $a \
+      --decoder-attention-heads $a \
       --encoder-embed-dim $h --decoder-embed-dim $h \
-      --encoder-ffn-embed-dim $ffn_h --decoder-ffn-embed-dim $ffn_h \
-      --encoder-layers $l --decoder-layers $l \
+      --decoder-ffn-embed-dim $ffn_h \
+      --decoder-layers $l \
       --softmax_bias \
       --only_convert \
       --save-dir ./save/$model

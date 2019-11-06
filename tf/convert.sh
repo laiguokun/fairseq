@@ -18,4 +18,4 @@ l=${FLAGS_l}
 h=${FLAGS_dim}
 
 python ckpt_to_npy.py --input_ckpt $inp/model.ckpt-0
-python npy_to_pt_encdec.py $out $l $h
+python npy_to_pt.py $out $l $h

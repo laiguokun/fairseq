@@ -57,7 +57,7 @@ else
       --lr-shrink 1 --max-lr 0.0009 --lr 1e-7 --min-lr 1e-9 --warmup-init-lr 1e-07 \
       --t-mult 1 --lr-period-updates 20000 \
       --snap_model_file ./tf/$model.pt \
-      --softmax_bias \
+      --softmax-bias \
       --only_convert \
       --encoder-attention-heads $a --decoder-attention-heads $a \
       --encoder-embed-dim $h --decoder-embed-dim $h \
@@ -79,9 +79,9 @@ CUDA_VISIBLE_DEVICES=$gpu python validate.py \
 echo "test set evaluation"
 CUDA_VISIBLE_DEVICES=$gpu python generate.py \
     data-bin/wmt16_en_de_bpe32k \
-    --task translation --dataset-impl mmap\
-    --path checkpoints/$model.pt --max-tokens 4000\
+    --task translation --dataset-impl mmap \
+    --path checkpoints/$model.pt --max-tokens 4000 \
     --user-dir models \
-    --beam 5 --remove-bpe --lenpen 0.6 --gen-subset test > wmt16_gen.txt
+    --beam 1 --remove-bpe --lenpen 0.6 --gen-subset valid > wmt16_gen.txt
     
 bash ./scripts/compound_split_bleu.sh wmt16_gen.txt
