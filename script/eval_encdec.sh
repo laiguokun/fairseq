@@ -84,4 +84,4 @@ CUDA_VISIBLE_DEVICES=$gpu python generate.py \
     --user-dir models \
     --beam 1 --remove-bpe --lenpen 0.6 --gen-subset valid > wmt16_gen.txt
     
-bash ./scripts/compound_split_bleu.sh wmt16_gen.txt
+bash scripts/sacrebleu_pregen.sh wmt13 en de wmt16_gen.txt
