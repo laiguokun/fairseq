@@ -19,9 +19,11 @@ if [ $(tail -n 1 $GEN | grep BLEU | wc -l) -ne 1 ]; then
     echo "not done generating"
     exit
 fi
-
+grep ^H $GEN | sed 's/^H\-//' | sort -n -k 1 | cut -f 3 | sed "s/ - /-/g" > $GEN.gen
 grep ^H $GEN | cut -f3- | perl $TOKENIZER -threads 8 -a -l $ori_l > $SYS
 grep ^T $GEN | cut -f2- | perl $TOKENIZER -threads 8 -a -l $tgt_l > $REF
+echo "sacrebleu"
+sacrebleu --test-set wmt13 --language-pair en-de < $GEN.gen
 echo "original bleu"
 fairseq-score --sys $SYS --ref $REF
 perl -ple 's{(\S)-(\S)}{$1 ##AT##-##AT## $2}g' < $SYS > $SYS_V2

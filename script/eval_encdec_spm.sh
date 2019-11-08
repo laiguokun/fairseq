@@ -81,7 +81,4 @@ CUDA_VISIBLE_DEVICES=$gpu python generate.py \
     --sacrebleu \
     --beam 1 --remove-bpe sentencepiece --lenpen 0.6 --gen-subset valid > wmt16_gen.txt
 
-echo "sacrebleu"
-tail -1 wmt16_gen.txt
-
 bash script/spm_bleu.sh wmt16_gen.txt en de
