@@ -31,3 +31,20 @@ bash convert_encdec.sh -i ende_nobias_L12H768A12 -o ende_nobias_L12H768A12.pt (-
 cd ..
 bash eval_encdec.sh -m ende_nobias_L12H768A12 -l 12 -d 768 -a 12
 ```
+
+## Eval Encoder-Decoder model with SPM
+
+### convert the tf mdoel to pytorch model
+
+Use the ende_nobias_L12H768A12 as the example
+```
+cd tf
+bash convert_encdec.sh -i ende_nobias_L12H768A12 -o ende_nobias_L12H768A12.pt (-l 12 -d 768)
+```
+
+### eval the model
+
+```
+cd ..
+bash eval_encdec.sh -m ende_nobias_L12H768A12 -l 12 -d 768 -a 12
+```

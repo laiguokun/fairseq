@@ -16,10 +16,11 @@ def embed_param(new_model, tf_model, prefix):
     new_model['decoder.embed_language'] = convert_to_tensor(
         tf_model[prefix+'/input/type_embedding/lookup_table'], 1)
     #remove the mask embed
+    vocab_size = int(sys.argv[4])
     new_model['encoder.embed_tokens.weight'] = \
-        convert_to_tensor(tf_model[prefix+'/input/word_embedding/lookup_table'])[:32768]
+        convert_to_tensor(tf_model[prefix+'/input/word_embedding/lookup_table'])[:vocab_size]
     new_model['decoder.embed_tokens.weight'] = \
-        convert_to_tensor(tf_model[prefix+'/input/word_embedding/lookup_table'])[:32768]
+        convert_to_tensor(tf_model[prefix+'/input/word_embedding/lookup_table'])[:vocab_size]
 
 def project_param(new_model, tf_model, prefix, tgt_prefix=None):
     if tgt_prefix is None:
@@ -78,7 +79,7 @@ if __name__ == '__main__':
     if 'model/lm_loss/bias' in tf_model:
         print("Use softmax bias")
         new_model['decoder.softmax_bias'] = convert_to_tensor(
-            tf_model['model/lm_loss/bias'])[:-2]
+            tf_model['model/lm_loss/bias'])[:int(sys.argv[4])]
     
     new_model['encoder.version'] = torch.FloatTensor([2.])
     new_model['decoder.version'] = torch.FloatTensor([2.])

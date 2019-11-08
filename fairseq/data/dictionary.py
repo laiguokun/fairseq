@@ -37,7 +37,7 @@ class Dictionary(object):
             for s in extra_special_symbols:
                 self.add_symbol(s)
         self.nspecial = len(self.symbols)
-
+        
     def __eq__(self, other):
         return self.indices == other.indices
 
@@ -210,16 +210,30 @@ class Dictionary(object):
 
         lines = f.readlines()
         indices_start_line = self._load_meta(lines)
-        for line in lines[indices_start_line:]:
+        force_load = False
+        for i, line in enumerate(lines[indices_start_line:]):
             idx = line.rfind(' ')
             if idx == -1:
                 raise ValueError("Incorrect dictionary format, expected '<token> <cnt>'")
             word = line[:idx]
-            count = int(line[idx + 1:])
-            self.indices[word] = len(self.symbols)
-            self.symbols.append(word)
-            self.count.append(count)
-
+            if i==0 and word=='<pad>':
+                force_load = True
+                print('remove pre add special tok')
+                self.symbols = []
+                self.count = []
+                self.indices = {}
+                self.pad_index = self.add_symbol('<pad>')
+                self.eos_index = self.add_symbol('</s>')
+                self.unk_index = self.add_symbol('<unk>')
+                self.bos_index = self.eos_index   
+                self.nspecial = len(self.symbols)
+            if force_load:
+                self.add_symbol(word)
+            else:
+                count = int(line[idx + 1:])
+                self.indices[word] = len(self.symbols)
+                self.symbols.append(word)
+                self.count.append(count)
     def _save(self, f, kv_iterator):
         if isinstance(f, str):
             os.makedirs(os.path.dirname(f), exist_ok=True)
@@ -237,7 +251,10 @@ class Dictionary(object):
     def save(self, f):
         """Stores dictionary into a text file"""
         ex_keys, ex_vals = self._get_meta()
-        self._save(f, zip(ex_keys + self.symbols[self.nspecial:], ex_vals + self.count[self.nspecial:]))
+        if self.pad_index==0:
+            self._save(f, zip(ex_keys + self.symbols, ex_vals + self.count))
+        else:
+            self._save(f, zip(ex_keys + self.symbols[self.nspecial:], ex_vals + self.count[self.nspecial:]))
 
     def dummy_sentence(self, length):
         t = torch.Tensor(length).uniform_(self.nspecial + 1, len(self)).long()

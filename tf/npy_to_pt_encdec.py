@@ -18,6 +18,6 @@ if __name__ == '__main__':
     if 'decoder/lm_loss/bias' in tf_model:
         print("Use softmax bias")
         new_model['decoder.softmax_bias'] = convert_to_tensor(
-            tf_model['decoder/lm_loss/bias'])[:-2]
+            tf_model['decoder/lm_loss/bias'])[:int(sys.argv[4])]
     
     torch.save(new_model, sys.argv[1])
