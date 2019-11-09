@@ -23,7 +23,7 @@ if [ "${FLAGS_bias}" = "False" ]; then
   CUDA_VISIBLE_DEVICES= python train.py \
       data-bin/wmt16_en_de_bpe32k \
       --user-dir models \
-      --arch transformer_wmt_en_de_big --language-embedding \
+      --arch my_transformer_wmt_en_de_big --language-embedding \
       --log-interval 100 --no-progress-bar \
       --max-update 30000 --share-all-embeddings --optimizer adam \
       --adam-betas '(0.9, 0.98)' \
@@ -45,7 +45,7 @@ else
   CUDA_VISIBLE_DEVICES= python train.py \
       data-bin/wmt16_en_de_bpe32k \
       --user-dir models \
-      --arch transformer_wmt_en_de_big --language-embedding \
+      --arch my_transformer_wmt_en_de_big --language-embedding \
       --log-interval 100 --no-progress-bar \
       --max-update 30000 --share-all-embeddings --optimizer adam \
       --adam-betas '(0.9, 0.98)' \

@@ -22,7 +22,8 @@ ffn_h=$[$h * 4]
 if [ "${FLAGS_bias}" = "False" ]; then
   CUDA_VISIBLE_DEVICES= python train.py \
       data-bin/wmt16_en_de_spm_bin \
-      --arch transformer_wmt_en_de_big --language-embedding \
+      --user-dir models \
+      --arch my_transformer_wmt_en_de_big --language-embedding \
       --log-interval 100 --no-progress-bar \
       --max-update 30000 --share-all-embeddings --optimizer adam \
       --adam-betas '(0.9, 0.98)' \
@@ -43,7 +44,8 @@ if [ "${FLAGS_bias}" = "False" ]; then
 else
   CUDA_VISIBLE_DEVICES= python train.py \
       data-bin/wmt16_en_de_spm_bin \
-      --arch transformer_wmt_en_de_big --language-embedding \
+      --user-dir models \
+      --arch my_transformer_wmt_en_de_big --language-embedding \
       --log-interval 100 --no-progress-bar \
       --max-update 30000 --share-all-embeddings --optimizer adam \
       --adam-betas '(0.9, 0.98)' \
