@@ -40,7 +40,7 @@ def clean_ckpt(_):
 
     var_dtypes[name] = tensor.dtype
     var_values[name] = tensor
-    
+
     model[name] = {'dtype': tensor.dtype, 'weight': tensor}
   np.save(output_file, model)
 

@@ -97,6 +97,7 @@ class MultiheadAttention(nn.Module):
         incremental_state=None,
         need_weights=True,
         static_kv=False,
+        attn_bias=None,
         attn_mask=None,
         before_softmax=False,
         need_head_weights=False,
@@ -104,12 +105,15 @@ class MultiheadAttention(nn.Module):
         """Input shape: Time x Batch x Channel
 
         Args:
+            attn_bias(Tensor, optional): [n_head x src_len x tgt_len]
+                addtional bias added to attention weights. Can used to
+                implement relative attention (default: None).
             key_padding_mask (ByteTensor, optional): mask to exclude
                 keys that are pads, of shape `(batch, src_len)`, where
                 padding elements are indicated by 1s.
             need_weights (bool, optional): return the attention weights,
                 averaged over heads (default: False).
-            attn_mask (ByteTensor, optional): typically used to
+            attn_mask (Tensor, optional): typically used to
                 implement causal attention, where the mask prevents the
                 attention from looking forward in time (default: None).
             before_softmax (bool, optional): return the raw attention
@@ -125,28 +129,28 @@ class MultiheadAttention(nn.Module):
         assert embed_dim == self.embed_dim
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
 
-        if self.enable_torch_version and not self.onnx_trace and incremental_state is None and not static_kv:
-            if self.qkv_same_dim:
-                return F.multi_head_attention_forward(query, key, value,
-                                                      self.embed_dim, self.num_heads,
-                                                      self.in_proj_weight,
-                                                      self.in_proj_bias, self.bias_k, self.bias_v,
-                                                      self.add_zero_attn, self.dropout,
-                                                      self.out_proj.weight, self.out_proj.bias,
-                                                      self.training, key_padding_mask, need_weights,
-                                                      attn_mask)
-            else:
-                return F.multi_head_attention_forward(query, key, value,
-                                                      self.embed_dim, self.num_heads,
-                                                      torch.empty([0]),
-                                                      self.in_proj_bias, self.bias_k, self.bias_v,
-                                                      self.add_zero_attn, self.dropout,
-                                                      self.out_proj.weight, self.out_proj.bias,
-                                                      self.training, key_padding_mask, need_weights,
-                                                      attn_mask, use_separate_proj_weight=True,
-                                                      q_proj_weight=self.q_proj_weight,
-                                                      k_proj_weight=self.k_proj_weight,
-                                                      v_proj_weight=self.v_proj_weight)
+        # if self.enable_torch_version and not self.onnx_trace and incremental_state is None and not static_kv:
+        #     if self.qkv_same_dim:
+        #         return F.multi_head_attention_forward(query, key, value,
+        #                                               self.embed_dim, self.num_heads,
+        #                                               self.in_proj_weight,
+        #                                               self.in_proj_bias, self.bias_k, self.bias_v,
+        #                                               self.add_zero_attn, self.dropout,
+        #                                               self.out_proj.weight, self.out_proj.bias,
+        #                                               self.training, key_padding_mask, need_weights,
+        #                                               attn_mask)
+        #     else:
+        #         return F.multi_head_attention_forward(query, key, value,
+        #                                               self.embed_dim, self.num_heads,
+        #                                               torch.empty([0]),
+        #                                               self.in_proj_bias, self.bias_k, self.bias_v,
+        #                                               self.add_zero_attn, self.dropout,
+        #                                               self.out_proj.weight, self.out_proj.bias,
+        #                                               self.training, key_padding_mask, need_weights,
+        #                                               attn_mask, use_separate_proj_weight=True,
+        #                                               q_proj_weight=self.q_proj_weight,
+        #                                               k_proj_weight=self.k_proj_weight,
+        #                                               v_proj_weight=self.v_proj_weight)
 
         if incremental_state is not None:
             saved_state = self._get_input_buffer(incremental_state)
@@ -184,10 +188,14 @@ class MultiheadAttention(nn.Module):
             v = torch.cat([v, self.bias_v.repeat(1, bsz, 1)])
             if attn_mask is not None:
                 attn_mask = torch.cat([attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1)
+            if attn_bias is not None:
+                zero_bias = attn_bias.new_zeros(*attn_bias.size[:-1], 1)
+                attn_bias = torch.cat([attn_bias, zero_bias], dim=-1)
             if key_padding_mask is not None:
                 key_padding_mask = torch.cat(
                     [key_padding_mask, key_padding_mask.new_zeros(key_padding_mask.size(0), 1)], dim=1)
 
+        # (zihang) This implementation is really weird
         q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
         if k is not None:
             k = k.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
@@ -237,6 +245,9 @@ class MultiheadAttention(nn.Module):
             v = torch.cat([v, v.new_zeros((v.size(0), 1) + v.size()[2:])], dim=1)
             if attn_mask is not None:
                 attn_mask = torch.cat([attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1)
+            if attn_bias is not None:
+                zero_bias = attn_bias.new_zeros(*attn_bias.size[:-1], 1)
+                attn_bias = torch.cat([attn_bias, zero_bias], dim=-1)
             if key_padding_mask is not None:
                 key_padding_mask = torch.cat(
                     [key_padding_mask, torch.zeros(key_padding_mask.size(0), 1).type_as(key_padding_mask)], dim=1)
@@ -246,6 +257,16 @@ class MultiheadAttention(nn.Module):
 
         assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
 
+        # Add attention bias before masking
+        if attn_bias is not None:
+            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            attn_bias = attn_bias.unsqueeze(0)
+            if self.onnx_trace:
+                attn_bias = attn_bias.repeat(attn_weights.size(0), 1, 1, 1)
+            attn_weights += attn_bias * self.scaling
+            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+        # Apply attention mask
         if attn_mask is not None:
             attn_mask = attn_mask.unsqueeze(0)
             if self.onnx_trace:

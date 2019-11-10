@@ -144,3 +144,112 @@ def PositionalEmbedding(
         )
     return m
 
+
+class RelativeSinusoidalPositionalEncoding(nn.Module):
+    """This module produces relative sinusoidal positional embeddings.
+
+    Padding symbols are ignored.
+    """
+
+    def __init__(self, embedding_dim, num_heads, init_size=1024):
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.head_dim = embedding_dim // num_heads
+
+        self.max_size = init_size
+        self.weights = RelativeSinusoidalPositionalEncoding.get_embedding(
+            init_size,
+            embedding_dim,
+        )
+        self.pos_vec = nn.Parameter(
+            torch.Tensor(num_heads, embedding_dim))
+
+        self.reset_parameters()
+        self.onnx_trace = False
+
+    def reset_parameters(self):
+        std = math.sqrt(1.0 / float(self.embedding_dim))
+        nn.init.normal_(self.pos_vec, std=std)
+
+    @staticmethod
+    def get_embedding(max_size, embedding_dim):
+        """Build relative sinusoidal embeddings.
+        """
+        half_dim = embedding_dim // 2
+        freq_seq = torch.arange(0, half_dim, 1.0, dtype=torch.float)
+        inv_freq = 1 / (10000 ** (freq_seq / half_dim))
+
+        pos_seq = torch.arange(max_size, -max_size, -1.0, dtype=torch.float)
+
+        sinusoid_inp = torch.einsum("t,d->td", pos_seq, inv_freq)
+        emb = torch.cat([torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)], -1)
+
+        if embedding_dim % 2 == 1:
+            # zero pad
+            emb = torch.cat([emb, torch.zeros(2 * max_size, 1)], dim=1)
+        return emb
+
+    @staticmethod
+    def rel_shift(x, row_dim, key_len):
+        """Perform relative shift to form the relative attention score."""
+        x_size = x.size()
+
+        # Deal with negative indexing
+        if row_dim < 0:
+            row_dim = x.ndim + row_dim
+            assert row_dim >= 0
+
+        # Assume `col_dim` = `row_dim + 1`
+        col_dim = row_dim + 1
+        assert col_dim < x.ndim
+
+        tgt_shape_1, tgt_shape_2 = [], []
+        for i in range(x.ndim):
+            if i == row_dim:
+                tgt_shape_1.append(x_size[col_dim])
+                tgt_shape_2.append(x_size[row_dim])
+            elif i == col_dim:
+                tgt_shape_1.append(x_size[row_dim])
+                tgt_shape_2.append(x_size[col_dim] - 1)
+            else:
+                tgt_shape_1.append(x_size[i])
+                tgt_shape_2.append(x_size[i])
+
+        x = x.reshape(tgt_shape_1)
+        x = torch.narrow(x, row_dim, 1, x.size(row_dim) - 1)
+        x = x.reshape(tgt_shape_2)
+        x = torch.narrow(x, col_dim, 0, key_len)
+
+        return x
+
+    def prepare_for_onnx_export_(self):
+        self.onnx_trace = True
+
+    def forward(self, input, incremental_state=None, timestep=None, **kwargs):
+        """Input is expected to be of size [bsz x seqlen]."""
+        bsz, seq_len = torch.onnx.operators.shape_as_tensor(input)
+        if self.weights is None or seq_len > self.max_size:
+            # recompute/expand embeddings if needed
+            self.weights = RelativeSinusoidalPositionalEncoding.get_embedding(
+                seq_len,
+                self.embedding_dim,
+            )
+            self.max_size = seq_len
+        self.weights = self.weights.to(self.pos_vec)
+
+        if incremental_state is not None:
+            pos_enc = self.weights[self.max_size-seq_len+1:self.max_size+1]
+            pos_enc = pos_enc.detach()
+            attn_bias = torch.einsum("nd,td->nt", self.pos_vec, pos_enc)
+            attn_bias = attn_bias[:, None, :]
+        else:
+            pos_enc = self.weights[self.max_size-seq_len:self.max_size+seq_len]
+            pos_enc = pos_enc.detach()
+            attn_bias = torch.einsum("nd,td->nt", self.pos_vec, pos_enc)
+            attn_bias = attn_bias[:, None, :].repeat(1, seq_len, 1)
+            attn_bias = RelativeSinusoidalPositionalEncoding.rel_shift(
+                 attn_bias, row_dim=-2, key_len=seq_len)
+
+        return attn_bias
+

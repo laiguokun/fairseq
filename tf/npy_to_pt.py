@@ -8,7 +8,7 @@ def convert_to_tensor(x, idx=None):
         return torch.FloatTensor(x['weight'])
     else:
         return torch.FloatTensor(x['weight'][idx])
-    
+
 def embed_param(new_model, tf_model, prefix):
     #convert embedding
     new_model['encoder.embed_language'] = convert_to_tensor(
@@ -25,6 +25,11 @@ def embed_param(new_model, tf_model, prefix):
 def project_param(new_model, tf_model, prefix, tgt_prefix=None):
     if tgt_prefix is None:
         tgt_prefix = prefix
+
+    # relative attention related
+    if prefix+'/transformer/pos_vec' in tf_model:
+        print("Found `pos_vec`")
+        new_model[tgt_prefix+'.rel_attn_encoding.pos_vec'] = convert_to_tensor(tf_model[prefix+'/transformer/pos_vec'])
 
     for layer_id in range(int(sys.argv[2])):
         def project_attn_param(n1, n2):
@@ -53,7 +58,7 @@ def project_param(new_model, tf_model, prefix, tgt_prefix=None):
                 convert_to_tensor(tf_model[prefix+'/transformer/layer_{}/{}_attn/LayerNorm/gamma'.format(layer_id, n1)])
             new_model[tgt_prefix+'.layers.{}.{}_attn_layer_norm.bias'.format(layer_id, n2)] = \
                 convert_to_tensor(tf_model[prefix+'/transformer/layer_{}/{}_attn/LayerNorm/beta'.format(layer_id, n1)])
-        
+
         project_attn_param('self', 'self')
         if prefix=='decoder':
             project_attn_param('cross', 'encoder')
@@ -72,18 +77,18 @@ if __name__ == '__main__':
     tf_model_file = ('./model.npy')
     tf_model = np.load(tf_model_file, allow_pickle=True).item()
     new_model = OrderedDict()
-    
+
     embed_param(new_model, tf_model, 'model')
     project_param(new_model, tf_model, 'model', 'decoder')
-    
+
     if 'model/lm_loss/bias' in tf_model:
         print("Use softmax bias")
         new_model['decoder.softmax_bias'] = convert_to_tensor(
             tf_model['model/lm_loss/bias'])[:int(sys.argv[4])]
-    
+
     new_model['encoder.version'] = torch.FloatTensor([2.])
     new_model['decoder.version'] = torch.FloatTensor([2.])
     new_model['decoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
     new_model['encoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
-    
+
     torch.save(new_model, sys.argv[1])

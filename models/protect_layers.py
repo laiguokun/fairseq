@@ -65,7 +65,7 @@ class TransformerEncoderLayer(nn.Module):
                     ] = state_dict[k]
                     del state_dict[k]
 
-    def forward(self, x, encoder_padding_mask, attn_mask=None):
+    def forward(self, x, encoder_padding_mask, attn_mask=None, attn_bias=None):
         """
         Args:
             x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
@@ -77,7 +77,7 @@ class TransformerEncoderLayer(nn.Module):
             attn_mask[t_tgt, t_src] = 1 means when calculating embedding
             for t_tgt, t_src is excluded (or masked out), =0 means it is
             included in attention
-
+            attn_bias[n_head, t_tgt, t_src] bias added to the attention weights
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
         """
@@ -92,7 +92,8 @@ class TransformerEncoderLayer(nn.Module):
         # will become -inf, which results in NaN in model parameters
         # TODO: to formally solve this problem, we need to change fairseq's
         # MultiheadAttention. We will do this later on.
-        x, _ = self.self_attn(query=x, key=x, value=x, key_padding_mask=encoder_padding_mask)
+        x, _ = self.self_attn(query=x, key=x, value=x, attn_bias=attn_bias,
+                              key_padding_mask=encoder_padding_mask)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
         x = self.maybe_layer_norm(self.self_attn_layer_norm, x, after=True)
@@ -194,6 +195,7 @@ class TransformerDecoderLayer(nn.Module):
         prev_self_attn_state=None,
         prev_attn_state=None,
         self_attn_mask=None,
+        self_attn_bias=None,
         self_attn_padding_mask=None,
         need_attn=False,
         need_head_weights=False,
@@ -228,6 +230,9 @@ class TransformerDecoderLayer(nn.Module):
         if self.cross_self_attention and not (incremental_state is not None and "prev_key" in self.self_attn._get_input_buffer(incremental_state)):
             if self_attn_mask is not None:
                 self_attn_mask = torch.cat((x.new(x.size(0), encoder_out.size(0)).zero_(), self_attn_mask), dim=1)
+            if self_attn_bias is not None:
+                zero_attn_bias = x.new(self_attn_bias.size(0), x.size(0), encoder_out.size(0)).zero_()
+                self_attn_bias = torch.cat((zero_attn_bias, self_attn_bias), dim=-1)
             if self_attn_padding_mask is not None:
                 if encoder_padding_mask is None:
                     encoder_padding_mask = self_attn_padding_mask.new(encoder_out.size(1), encoder_out.size(0)).zero_()
@@ -240,6 +245,7 @@ class TransformerDecoderLayer(nn.Module):
             query=x,
             key=y,
             value=y,
+            attn_bias=self_attn_bias,
             key_padding_mask=self_attn_padding_mask,
             incremental_state=incremental_state,
             need_weights=False,

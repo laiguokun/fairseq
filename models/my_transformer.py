@@ -15,13 +15,14 @@ from fairseq.models import (
     register_model_architecture
 )
 from .protect_models import(
-    FairseqEncoder, 
+    FairseqEncoder,
     FairseqIncrementalDecoder,
     FairseqEncoderDecoderModel
 )
 from .protect_embeddings import(
     PositionalEmbedding,
-    SinusoidalPositionalEmbedding
+    SinusoidalPositionalEmbedding,
+    RelativeSinusoidalPositionalEncoding
 )
 from .protect_layers import(
     TransformerDecoderLayer,
@@ -110,6 +111,7 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='perform layer-wise attention (cross-attention or cross+self-attention)')
         parser.add_argument('--language-embedding', default=False, action='store_true')
         parser.add_argument('--softmax-bias', default=False, action='store_true')
+        parser.add_argument('--relative-attn', default=False, action='store_true')
         # fmt: on
 
     @classmethod
@@ -191,6 +193,7 @@ class TransformerEncoder(FairseqEncoder):
         self.register_buffer('version', torch.Tensor([3]))
 
         self.dropout = args.dropout
+        self.relative_attn = args.relative_attn
 
         embed_dim = embed_tokens.embedding_dim
         self.padding_idx = embed_tokens.padding_idx
@@ -198,10 +201,19 @@ class TransformerEncoder(FairseqEncoder):
 
         self.embed_tokens = embed_tokens
         self.embed_scale = math.sqrt(embed_dim)
-        self.embed_positions = PositionalEmbedding(
-            args.max_source_positions, embed_dim, self.padding_idx,
-            learned=args.encoder_learned_pos,
-        ) if not args.no_token_positional_embeddings else None
+
+        if self.relative_attn:
+            self.rel_attn_encoding = RelativeSinusoidalPositionalEncoding(
+                embedding_dim=embed_dim,
+                num_heads=args.encoder_attention_heads)
+
+        if args.no_token_positional_embeddings or args.relative_attn:
+            self.embed_positions = None
+        else:
+            self.embed_positions = PositionalEmbedding(
+                args.max_source_positions, embed_dim, self.padding_idx,
+                learned=args.encoder_learned_pos,
+            )
 
         self.layer_wise_attention = getattr(args, 'layer_wise_attention', False)
 
@@ -215,20 +227,21 @@ class TransformerEncoder(FairseqEncoder):
             self.layer_norm = LayerNorm(embed_dim)
         else:
             self.layer_norm = None
-        
+
         if args.language_embedding:
-            self.embed_language = LanguageEmbedding(embed_dim) 
+            self.embed_language = LanguageEmbedding(embed_dim)
         else:
             self.embed_language = None
 
     def forward_embedding(self, src_tokens):
         # embed tokens and positions
         embed = self.embed_scale * self.embed_tokens(src_tokens)
+        x = embed
         if self.embed_positions is not None:
-            x = embed + self.embed_positions(src_tokens)
+            x = x + self.embed_positions(src_tokens)
         if self.embed_language is not None:
             lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
-            x += lang_emb
+            x = x + lang_emb
         x = F.dropout(x, p=self.dropout, training=self.training)
         return x, embed
 
@@ -257,6 +270,9 @@ class TransformerEncoder(FairseqEncoder):
 
         x, encoder_embedding = self.forward_embedding(src_tokens)
 
+        # Compute relative attention bias
+        attn_bias = self.rel_attn_encoding(src_tokens) if self.relative_attn else None
+
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
@@ -269,7 +285,7 @@ class TransformerEncoder(FairseqEncoder):
 
         # encoder layers
         for layer in self.layers:
-            x = layer(x, encoder_padding_mask)
+            x = layer(x, encoder_padding_mask, attn_bias=attn_bias)
             if return_all_hiddens:
                 encoder_states.append(x)
 
@@ -358,6 +374,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         super().__init__(dictionary)
         self.register_buffer('version', torch.Tensor([3]))
 
+        self.relative_attn = args.relative_attn
+
         self.dropout = args.dropout
         self.share_input_output_embed = args.share_decoder_input_output_embed
 
@@ -373,10 +391,18 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
         self.project_in_dim = Linear(input_embed_dim, embed_dim, bias=False) if embed_dim != input_embed_dim else None
 
-        self.embed_positions = PositionalEmbedding(
-            args.max_target_positions, embed_dim, self.padding_idx,
-            learned=args.decoder_learned_pos,
-        ) if not args.no_token_positional_embeddings else None
+        if args.relative_attn:
+            self.rel_attn_encoding = RelativeSinusoidalPositionalEncoding(
+                embedding_dim=embed_dim,
+                num_heads=args.decoder_attention_heads)
+
+        if args.no_token_positional_embeddings or args.relative_attn:
+            self.embed_positions = None
+        else:
+            self.embed_positions = PositionalEmbedding(
+                args.max_target_positions, embed_dim, self.padding_idx,
+                learned=args.decoder_learned_pos,
+            )
 
         self.cross_self_attention = getattr(args, 'cross_self_attention', False)
         self.layer_wise_attention = getattr(args, 'layer_wise_attention', False)
@@ -412,7 +438,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             self.layer_norm = None
 
         if args.language_embedding:
-            self.embed_language = LanguageEmbedding(embed_dim) 
+            self.embed_language = LanguageEmbedding(embed_dim)
         else:
             self.embed_language = None
 
@@ -494,6 +520,13 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             incremental_state=incremental_state,
         ) if self.embed_positions is not None else None
 
+        # Compute relative attention bias
+        self_attn_bias = self.rel_attn_encoding(
+            prev_output_tokens,
+            incremental_state=incremental_state,
+        ) if self.relative_attn else None
+
+        # use the last-step prediction as the next-step input
         if incremental_state is not None:
             prev_output_tokens = prev_output_tokens[:, -1:]
             if positions is not None:
@@ -507,7 +540,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
         if positions is not None:
             x += positions
-        
+
         if self.embed_language is not None:
             lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
             x += lang_emb
@@ -542,6 +575,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 encoder_state,
                 encoder_out['encoder_padding_mask'] if encoder_out is not None else None,
                 incremental_state,
+                self_attn_bias=self_attn_bias,
                 self_attn_mask=self_attn_mask,
                 self_attn_padding_mask=self_attn_padding_mask,
                 need_attn=(idx == alignment_layer),
@@ -577,8 +611,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             if self.share_input_output_embed:
                 if self.softmax_bias is not None:
                     return F.linear(
-                        features, 
-                        self.embed_tokens.weight, 
+                        features,
+                        self.embed_tokens.weight,
                         self.softmax_bias)
                 else:
                     return F.linear(features, self.embed_tokens.weight)

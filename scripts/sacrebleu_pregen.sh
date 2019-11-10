@@ -25,4 +25,4 @@ grep ^H $GEN \
 | sed "s/ - /-/g" \
 > $GEN.sorted.detok
 
-sacrebleu --test-set $TESTSET --language-pair "${SRCLANG}-${TGTLANG}" < $GEN.sorted.detok
+sacrebleu --test-set $TESTSET --language-pair "${SRCLANG}-${TGTLANG}" --width 2 < $GEN.sorted.detok
