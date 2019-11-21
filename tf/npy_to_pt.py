@@ -22,6 +22,8 @@ def embed_param(new_model, tf_model, prefix):
     new_model['decoder.embed_tokens.weight'] = \
         convert_to_tensor(tf_model[prefix+'/input/word_embedding/lookup_table'])[:vocab_size]
 
+rel_attn = False
+
 def project_param(new_model, tf_model, prefix, tgt_prefix=None):
     if tgt_prefix is None:
         tgt_prefix = prefix
@@ -29,6 +31,8 @@ def project_param(new_model, tf_model, prefix, tgt_prefix=None):
     # relative attention related
     if prefix+'/transformer/pos_vec' in tf_model:
         print("Found `pos_vec`")
+        global rel_attn
+        rel_attn = True
         new_model[tgt_prefix+'.rel_attn_encoding.pos_vec'] = convert_to_tensor(tf_model[prefix+'/transformer/pos_vec'])
 
     for layer_id in range(int(sys.argv[2])):
@@ -60,6 +64,7 @@ def project_param(new_model, tf_model, prefix, tgt_prefix=None):
                 convert_to_tensor(tf_model[prefix+'/transformer/layer_{}/{}_attn/LayerNorm/beta'.format(layer_id, n1)])
 
         project_attn_param('self', 'self')
+        #project_attn_param('abs', 'self')
         if prefix=='decoder':
             project_attn_param('cross', 'encoder')
         new_model[tgt_prefix+'.layers.{}.final_layer_norm.weight'.format(layer_id)] = \
@@ -86,9 +91,9 @@ if __name__ == '__main__':
         new_model['decoder.softmax_bias'] = convert_to_tensor(
             tf_model['model/lm_loss/bias'])[:int(sys.argv[4])]
 
-    new_model['encoder.version'] = torch.FloatTensor([2.])
-    new_model['decoder.version'] = torch.FloatTensor([2.])
-    new_model['decoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
-    new_model['encoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
-
+    if not rel_attn:
+        new_model['decoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
+        new_model['encoder.embed_positions._float_tensor'] = torch.FloatTensor([0.])
+    else:
+        print('using relative embedding')
     torch.save(new_model, sys.argv[1])

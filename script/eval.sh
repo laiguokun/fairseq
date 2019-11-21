@@ -26,19 +26,20 @@ CUDA_VISIBLE_DEVICES= python train.py \
     --save-dir ./save/$model \
     ${bool_args}
 
-# echo "===== NLL evaluation ====="
-# CUDA_VISIBLE_DEVICES=$FLAGS_gpu python validate.py \
-#     data-bin/wmt16_en_de_bpe32k \
-#     --task translation --dataset-impl mmap \
-#     --path checkpoints/$model.pt --max-tokens 4000 \
-#     --user-dir models
-#
-# echo "===== BLEU evaluation ====="
-# CUDA_VISIBLE_DEVICES=$FLAGS_gpu python generate.py \
-#     data-bin/wmt16_en_de_bpe32k \
-#     --task translation --dataset-impl mmap \
-#     --path checkpoints/$model.pt --max-tokens 4000 \
-#     --user-dir models \
-#     --beam 5 --remove-bpe --lenpen 0.35 --gen-subset test > wmt16_gen.txt
-#
-# bash ./scripts/compound_split_bleu.sh wmt16_gen.txt
+echo "===== NLL evaluation ====="
+CUDA_VISIBLE_DEVICES=$FLAGS_gpu python validate.py \
+    data-bin/wmt16_en_de_bpe32k \
+    --task translation --dataset-impl mmap \
+    --path checkpoints/$model.pt --max-tokens 4000 \
+    --user-dir models
+
+echo "===== BLEU evaluation ====="
+CUDA_VISIBLE_DEVICES=$FLAGS_gpu python generate.py \
+    data-bin/wmt16_en_de_bpe32k \
+    --task translation --dataset-impl mmap \
+    --path checkpoints/$model.pt --max-tokens 4000 \
+    --user-dir models \
+    --beam 1 --remove-bpe --lenpen 0.6 --gen-subset valid > wmt16_gen.txt
+
+bash scripts/sacrebleu_pregen.sh wmt13 en de wmt16_gen.txt
+

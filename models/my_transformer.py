@@ -12,13 +12,16 @@ import torch.nn.functional as F
 from fairseq import options, utils
 from fairseq.models import (
     register_model,
-    register_model_architecture
-)
-from .protect_models import(
+    register_model_architecture,
     FairseqEncoder,
     FairseqIncrementalDecoder,
     FairseqEncoderDecoderModel
 )
+# from .protect_models import(
+#     FairseqEncoder,
+#     FairseqIncrementalDecoder,
+#     FairseqEncoderDecoderModel
+# )
 from .protect_embeddings import(
     PositionalEmbedding,
     SinusoidalPositionalEmbedding,

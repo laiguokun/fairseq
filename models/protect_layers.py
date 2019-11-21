@@ -241,6 +241,9 @@ class TransformerDecoderLayer(nn.Module):
         else:
             y = x
 
+        #if key_padding_mask is not None:
+        #    self_attn_padding_mask = key_padding_mask
+
         x, attn = self.self_attn(
             query=x,
             key=y,

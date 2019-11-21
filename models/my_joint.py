@@ -13,16 +13,29 @@ from fairseq import options
 from fairseq import utils
 
 from fairseq.models import (
-    FairseqIncrementalDecoder, FairseqEncoder, FairseqModel, register_model, register_model_architecture
+    register_model,
+    register_model_architecture,
+    FairseqEncoder,
+    FairseqIncrementalDecoder,
+    FairseqEncoderDecoderModel
 )
 
-from .new_multihead_attention import ProtectedMultiheadAttention
-from .new_multihead_attention import ProtectedPositionalEmbedding
+from .protect_embeddings import(
+    PositionalEmbedding,
+    SinusoidalPositionalEmbedding,
+    RelativeSinusoidalPositionalEncoding
+)
+from .protect_layers import(
+    TransformerDecoderLayer
+)
+from .protect_modules import (
+    AdaptiveSoftmax,
+    LayerNorm,
+    MultiheadAttention
+)
 
-# from fairseq.modules import PositionalEmbedding as ProtectedPositionalEmbedding
-
-@register_model('new_joint_attention')
-class JointAttentionModel(FairseqModel):
+@register_model('my_joint_attention')
+class JointAttentionModel(FairseqEncoderDecoderModel):
     """
     Local Joint Source-Target model from
     `"Joint Source-Target Self Attention with Locality Constraints" (Fonollosa, et al, 2019)
@@ -77,8 +90,12 @@ class JointAttentionModel(FairseqModel):
                             help='embedding dimension for FFN')
         parser.add_argument('--decoder-attention-heads', type=int, metavar='N',
                             help='num attention heads')
-        parser.add_argument('--softmax_bias', action='store_true', default=False, 
-                            help='softmax_bias')            
+        parser.add_argument('--no-token-positional-embeddings', default=False, action='store_true',
+                            help='if set, disables positional embeddings (outside self attention)')
+        parser.add_argument('--relative-attn', action='store_true', default=False,
+                            help='relative attention')
+        parser.add_argument('--softmax-bias', action='store_true', default=False,
+                            help='softmax_bias')
 
     @classmethod
     def build_model(cls, args, task):
@@ -155,13 +172,15 @@ class JointAttentionEncoder(FairseqEncoder):
 
         self.embed_tokens = embed_tokens
         self.embed_scale = math.sqrt(embed_dim)
-        self.embed_positions = ProtectedPositionalEmbedding(
-            args.max_source_positions, embed_dim, self.padding_idx,
-            learned=args.encoder_learned_pos,
-        ) 
-        self.embed_language = LanguageEmbedding(embed_dim)
 
-        self.register_buffer('version', torch.Tensor([2]))
+        if args.no_token_positional_embeddings or args.relative_attn:
+            self.embed_positions = None
+        else:
+            self.embed_positions = PositionalEmbedding(
+                args.max_source_positions, embed_dim, self.padding_idx,
+                learned=args.encoder_learned_pos,
+            )
+        self.embed_language = LanguageEmbedding(embed_dim)
 
     def forward(self, src_tokens, src_lengths):
         """
@@ -192,10 +211,16 @@ class JointAttentionEncoder(FairseqEncoder):
         }
 
     def embed_layer(self, x):
-        positions_emb = self.embed_positions(x)
+        # embed positions
+        positions = self.embed_positions(
+            x) if self.embed_positions is not None else None
+        # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(x)
-        lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
-        x = x + positions_emb + lang_emb
+        if positions is not None:
+            x += positions
+        if self.embed_language is not None:
+            lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
+            x += lang_emb
         x = F.dropout(x, p=self.dropout, training=self.training)
         return x
 
@@ -228,7 +253,7 @@ class JointAttentionEncoder(FairseqEncoder):
 class JointAttentionDecoder(FairseqIncrementalDecoder):
     """
     JointAttention decoder consisting of *args.decoder_layers* layers. Each layer
-    is a :class:`ProtectedTransformerDecoderLayer`.
+    is a :class:`TransformerDecoderLayer`.
 
     Args:
         args (argparse.Namespace): parsed command-line arguments
@@ -247,29 +272,37 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
         embed_dim = args.decoder_embed_dim
         output_embed_dim = args.decoder_output_dim
 
-        padding_idx = embed_tokens.padding_idx
+        self.padding_idx = embed_tokens.padding_idx
         self.max_target_positions = args.max_target_positions
 
         self.embed_tokens = embed_tokens
         self.embed_scale = math.sqrt(embed_dim)
 
-        self.embed_positions = ProtectedPositionalEmbedding(
-            args.max_target_positions, embed_dim, padding_idx,
-            learned=args.decoder_learned_pos,
-        ) 
+        self.relative_attn = args.relative_attn
+        if self.relative_attn:
+            self.rel_attn_encoding = RelativeSinusoidalPositionalEncoding(
+                embedding_dim=embed_dim,
+                num_heads=args.decoder_attention_heads)
+
+        if args.no_token_positional_embeddings or args.relative_attn:
+            self.embed_positions = None
+        else:
+            self.embed_positions = PositionalEmbedding(
+                args.max_source_positions, embed_dim, self.padding_idx,
+                learned=args.decoder_learned_pos,
+            )
 
         self.embed_language = LanguageEmbedding(embed_dim)
 
         self.layers = nn.ModuleList([])
         self.layers.extend([
-            ProtectedTransformerDecoderLayer(args)
+            TransformerDecoderLayer(args, no_encoder_attn=True)
             for _ in range(args.decoder_layers)
         ])
 
         if not self.share_input_output_embed:
             self.embed_out = nn.Parameter(torch.Tensor(len(dictionary), output_embed_dim))
             nn.init.normal_(self.embed_out, mean=0, std=output_embed_dim ** -0.5)
-        self.register_buffer('version', torch.Tensor([2]))
         self.normalize = args.decoder_normalize_before and final_norm
         if self.normalize:
             self.layer_norm = LayerNorm(embed_dim)
@@ -295,38 +328,57 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
                 - the last decoder layer's attention weights of shape `(batch,
                   tgt_len, src_len)`
         """
+
         tgt_len = prev_output_tokens.size(1)
-        target = self.embed_layer(prev_output_tokens)
+        x = self.embed_layer(prev_output_tokens, incremental_state=incremental_state)
+
         # B x T x C -> T x B x C
-        target = target.transpose(0, 1)
+        target = prev_output_tokens.transpose(0, 1)
         source = encoder_out['encoder_out']
-        
+        x = x.transpose(0, 1)
+
+        bsz = target.size(1)
+        seq_len = target.size(0) + source.size(0)
+        tmp = torch.zeros(bsz, seq_len, device=target.device)
+        # Compute relative attention bias
+        self_attn_bias = self.rel_attn_encoding(
+            tmp,
+            incremental_state=incremental_state,
+        ) if self.relative_attn else None
+
         # extended attention mask
         source_padding_mask = encoder_out['encoder_padding_mask']
-        target_padding_mask = source_padding_mask.new_zeros((source_padding_mask.size(0), tgt_len))
+        target_padding_mask = source_padding_mask.new_zeros((bsz, tgt_len))
         padding_mask = torch.cat((source_padding_mask, target_padding_mask), 1)
-        x = torch.cat([source, target], 0)
-        attn_mask = source.new_zeros(x.size(0), x.size(0))
-        target_mask = self.buffered_future_mask(target)
-        attn_mask[-tgt_len:, -tgt_len:] = target_mask
-        src_to_tgt_mask = utils.fill_with_neg_inf(source.new(source.size(0), target.size(0)))
-        attn_mask[:-tgt_len, -tgt_len:] = src_to_tgt_mask
         if incremental_state is None:
             #no incremental forward, used in training and validation
-            x = self.tf_forward(x, 
-                attn_mask=attn_mask, 
-                padding_mask=padding_mask)
+            attn_mask = source.new_zeros(seq_len, seq_len)
+            target_mask = self.buffered_future_mask(target)
+            attn_mask[-tgt_len:, -tgt_len:] = target_mask
+            src_to_tgt_mask = utils.fill_with_neg_inf(source.new(source.size(0), tgt_len))
+            attn_mask[:-tgt_len, -tgt_len:] = src_to_tgt_mask
+            x = torch.cat([source, x], axis=0)
+            x = self.tfm_forward(x,
+                attn_mask=attn_mask,
+                padding_mask=padding_mask,
+                self_attn_bias=self_attn_bias)
             x = x[-tgt_len:]
         else:
             #inference phase
             if len(incremental_state) == 0:
                 #process source sentence
-                source = self.tf_forward(source, 
+                tmp = torch.zeros(bsz, source.size(0), device=target.device)
+                source_attn_bias = self.rel_attn_encoding(
+                    tmp) if self.relative_attn else None
+                source = self.tfm_forward(source,
                     padding_mask=source_padding_mask,
+                    self_attn_bias=source_attn_bias,
                     incremental_state=incremental_state)
-            x = self.tf_forward(x[-1:],
-                padding_mask=padding_mask,
-                incremental_state=incremental_state)
+            key_padding_mask = prev_output_tokens[:, -1:].eq(self.padding_idx)
+            x = self.tfm_forward(x,
+                padding_mask=key_padding_mask,
+                incremental_state=incremental_state,
+                self_attn_bias=self_attn_bias)
 
         if self.normalize:
             x = self.layer_norm(x)
@@ -337,20 +389,41 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
         info = {}
         return pred, info
 
-    def embed_layer(self, x):
-        positions_emb = self.embed_positions(x)
+    def embed_layer(self, x, incremental_state):
+        # embed positions
+        positions = self.embed_positions(
+            x,
+            incremental_state=incremental_state,
+        ) if self.embed_positions is not None else None
+        # use the last-step prediction as the next-step input
+        if incremental_state is not None:
+            x = x[:, -1:]
+            if positions is not None:
+                positions = positions[:, -1:]
+        # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(x)
-        lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
-        x = x + positions_emb + lang_emb
+        if positions is not None:
+            x += positions
+        if self.embed_language is not None:
+            lang_emb = self.embed_scale * self.embed_language.view(1, 1, -1)
+            x += lang_emb
         x = F.dropout(x, p=self.dropout, training=self.training)
         return x
-        
-    def tf_forward(self, x, attn_mask=None, padding_mask=None, incremental_state=None):
+
+    def tfm_forward(
+        self,
+        x,
+        attn_mask=None,
+        padding_mask=None,
+        incremental_state=None,
+        self_attn_bias=None):
         for i, layer in enumerate(self.layers):
-            x, attn = layer(x, 
-                attn_mask=attn_mask, 
-                padding_mask=padding_mask,
-                incremental_state=incremental_state)
+            x, attn = layer(
+                x,
+                self_attn_mask=attn_mask,
+                self_attn_padding_mask=padding_mask,
+                incremental_state=incremental_state,
+                self_attn_bias=self_attn_bias)
         return x
 
     def output_layer(self, x):
@@ -383,145 +456,6 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
             self._future_mask = torch.triu(utils.fill_with_neg_inf(self._future_mask.resize_(dim, dim)), 1)
         return self._future_mask[:dim, :dim]
 
-# Adapted from fairseq/model/transformer.py to use ProtectedMultiheadAttention
-class ProtectedTransformerDecoderLayer(nn.Module):
-    """Decoder layer block.
-
-    In the original paper each operation (multi-head attention, encoder
-    attention or FFN) is postprocessed with: `dropout -> add residual ->
-    layernorm`. In the tensor2tensor code they suggest that learning is more
-    robust when preprocessing each layer with layernorm and postprocessing with:
-    `dropout -> add residual`. We default to the approach in the paper, but the
-    tensor2tensor approach can be enabled by setting
-    *args.decoder_normalize_before* to ``True``.
-
-    Args:
-        args (argparse.Namespace): parsed command-line arguments
-        no_encoder_attn (bool, optional): whether to attend to encoder outputs
-            (default: False).
-    """
-
-    def __init__(self, args):
-        super().__init__()
-        self.embed_dim = args.decoder_embed_dim
-        self.self_attn = ProtectedMultiheadAttention(
-            self.embed_dim, args.decoder_attention_heads,
-            dropout=args.attention_dropout,
-        )
-        self.dropout = args.dropout
-        self.relu_dropout = args.relu_dropout
-        self.normalize_before = args.decoder_normalize_before
-
-        self.self_attn_layer_norm = LayerNorm(self.embed_dim)
-
-        self.fc1 = Linear(self.embed_dim, args.decoder_ffn_embed_dim)
-        self.fc2 = Linear(args.decoder_ffn_embed_dim, self.embed_dim)
-
-        self.final_layer_norm = LayerNorm(self.embed_dim)
-        self.need_attn = True
-
-        self.onnx_trace = False
-
-    def prepare_for_onnx_export_(self):
-        self.onnx_trace = True
-
-    def forward(self, x, incremental_state=None,
-                attn_mask=None,
-                padding_mask=None):
-        """
-        Args:
-            x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
-            encoder_padding_mask (ByteTensor): binary ByteTensor of shape
-                `(batch, src_len)` where padding elements are indicated by ``1``.
-        Returns:
-            encoded output of shape `(batch, src_len, embed_dim)`
-        """
-        residual = x
-        x = self.maybe_layer_norm(self.self_attn_layer_norm, x, before=True)
-        x = self.self_attn(
-            query=x,
-            key=x,
-            value=x,
-            key_padding_mask=padding_mask,
-            incremental_state=incremental_state,
-            attn_mask=attn_mask,
-        )
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        x = residual + x
-        x = self.maybe_layer_norm(self.self_attn_layer_norm, x, after=True)
-
-        attn = None
-        residual = x
-        x = self.maybe_layer_norm(self.final_layer_norm, x, before=True)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, p=self.relu_dropout, training=self.training)
-        x = self.fc2(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        x = residual + x
-        x = self.maybe_layer_norm(self.final_layer_norm, x, after=True)
-        if self.onnx_trace:
-            saved_state = self.self_attn._get_input_buffer(incremental_state)
-            self_attn_state = saved_state["prev_key"], saved_state["prev_value"]
-            return x, attn, self_attn_state
-        return x, attn
-
-    def test_forward(self, x, encoder_out, encoder_padding_mask, incremental_state,
-                prev_self_attn_state=None, prev_attn_state=None, self_attn_mask=None,
-                self_attn_padding_mask=None):
-        """
-        Args:
-            x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
-            encoder_padding_mask (ByteTensor): binary ByteTensor of shape
-                `(batch, src_len)` where padding elements are indicated by ``1``.
-        Returns:
-            encoded output of shape `(batch, src_len, embed_dim)`
-        """
-        residual = x
-        x = self.maybe_layer_norm(self.self_attn_layer_norm, x, before=True)
-        if prev_self_attn_state is not None:
-            if incremental_state is None:
-                incremental_state = {}
-            prev_key, prev_value = prev_self_attn_state
-            saved_state = {"prev_key": prev_key, "prev_value": prev_value}
-            self.self_attn._set_input_buffer(incremental_state, saved_state)
-        x, _ = self.self_attn(
-            query=x,
-            key=x,
-            value=x,
-            key_padding_mask=self_attn_padding_mask,
-            incremental_state=incremental_state,
-            attn_mask=self_attn_mask,
-        )
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        x = residual + x
-        x = self.maybe_layer_norm(self.self_attn_layer_norm, x, after=True)
-
-        attn = None
-
-        residual = x
-        x = self.maybe_layer_norm(self.final_layer_norm, x, before=True)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, p=self.relu_dropout, training=self.training)
-        x = self.fc2(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        x = residual + x
-        x = self.maybe_layer_norm(self.final_layer_norm, x, after=True)
-        if self.onnx_trace:
-            saved_state = self.self_attn._get_input_buffer(incremental_state)
-            self_attn_state = saved_state["prev_key"], saved_state["prev_value"]
-            return x, attn, self_attn_state
-        return x, attn
-
-    def maybe_layer_norm(self, layer_norm, x, before=False, after=False):
-        assert before ^ after
-        if after ^ self.normalize_before:
-            return layer_norm(x)
-        else:
-            return x
-
-    def make_generation_fast_(self, need_attn=False, **kwargs):
-        self.need_attn = need_attn
-
 
 def Embedding(num_embeddings, embedding_dim, padding_idx):
     m = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)
@@ -535,12 +469,6 @@ def LanguageEmbedding(embedding_dim):
     nn.init.normal_(m, mean=0, std=embedding_dim ** -0.5)
     return m
 
-
-def LayerNorm(embedding_dim):
-    m = nn.LayerNorm(embedding_dim)
-    return m
-
-
 def Linear(in_features, out_features, bias=True):
     m = nn.Linear(in_features, out_features, bias)
     nn.init.xavier_uniform_(m.weight)
@@ -549,7 +477,7 @@ def Linear(in_features, out_features, bias=True):
     return m
 
 
-@register_model_architecture('new_joint_attention', 'new_joint_attention')
+@register_model_architecture('my_joint_attention', 'my_joint_attention')
 def base_architecture(args):
     args.encoder_embed_path = getattr(args, 'encoder_embed_path', None)
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 512)
@@ -572,7 +500,7 @@ def base_architecture(args):
     args.share_decoder_input_output_embed = getattr(args, 'share_decoder_input_output_embed', True)
     args.share_all_embeddings = getattr(args, 'share_all_embeddings', False)
 
-@register_model_architecture('new_joint_attention', 'new_joint_attention_wmt_en_de_big')
+@register_model_architecture('my_joint_attention', 'my_joint_attention_wmt_en_de_big')
 def joint_attention_wmt_en_de_big(args):
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 1024)
     args.decoder_embed_dim = getattr(args, 'decoder_embed_dim', 1024)
