@@ -34,7 +34,7 @@ def get_validation_mul_parser(default_task='translation'):
     add_distributed_training_args(parser)
     group = parser.add_argument_group('Evaluation')
     add_common_eval_args(group)
-    return parser    
+    return parser
 
 def get_generation_parser(interactive=False, default_task='translation'):
     parser = get_parser('Generation', default_task)
@@ -87,6 +87,8 @@ def eval_str_list(x, type=float):
 def eval_bool(x, default=False):
     if x is None:
         return default
+    if type(x) == bool:
+        return x
     try:
         return bool(eval(x))
     except TypeError:
@@ -426,9 +428,9 @@ def add_checkpoint_args(parser):
     group.add_argument('--maximize-best-checkpoint-metric', action='store_true',
                        help='select the largest metric value for saving "best" checkpoints')
     group.add_argument('--snap_model_file', type=str, default='None',
-                       help='load model from a snapshot')  
+                       help='load model from a snapshot')
     group.add_argument('--only_convert', action='store_true',
-                       help='transfer a model file to a fairseq checkpoint')                     
+                       help='transfer a model file to a fairseq checkpoint')
     # fmt: on
     return group
 
