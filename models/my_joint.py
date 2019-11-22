@@ -23,7 +23,7 @@ from fairseq.models import (
 from .protect_embeddings import(
     PositionalEmbedding,
     SinusoidalPositionalEmbedding,
-    RelativeSinusoidalPositionalEncoding
+    RelativeSinusoidalPositionalEncoding,
 )
 from .protect_layers import(
     TransformerDecoderLayer
@@ -96,6 +96,8 @@ class JointAttentionModel(FairseqEncoderDecoderModel):
                             help='relative attention')
         parser.add_argument('--softmax-bias', action='store_true', default=False,
                             help='softmax_bias')
+        parser.add_argument('--no-shift-target-pos', action='store_true', default=False,
+                            help='')
 
     @classmethod
     def build_model(cls, args, task):
@@ -208,6 +210,7 @@ class JointAttentionEncoder(FairseqEncoder):
         return {
             'encoder_out': x,  # T x B x C
             'encoder_padding_mask': encoder_padding_mask,  # B x T
+            'src_tokens': src_tokens, # B X T
         }
 
     def embed_layer(self, x):
@@ -241,6 +244,9 @@ class JointAttentionEncoder(FairseqEncoder):
         if encoder_out['encoder_padding_mask'] is not None:
             encoder_out['encoder_padding_mask'] = \
                 encoder_out['encoder_padding_mask'].index_select(0, new_order)
+        if encoder_out['src_tokens'] is not None:
+            encoder_out['src_tokens'] = \
+                encoder_out['src_tokens'].index_select(0, new_order)
         return encoder_out
 
     def max_positions(self):
@@ -310,6 +316,8 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
         if args.softmax_bias:
             self.softmax_bias = nn.Parameter(torch.Tensor(len(dictionary),))
 
+        self.no_shift_target_pos = args.no_shift_target_pos
+
     def forward(self, prev_output_tokens, encoder_out, incremental_state=None):
         """
         Args:
@@ -340,16 +348,24 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
         bsz = target.size(1)
         seq_len = target.size(0) + source.size(0)
         tmp = torch.zeros(bsz, seq_len, device=target.device)
-        # Compute relative attention bias
-        self_attn_bias = self.rel_attn_encoding(
-            tmp,
-            incremental_state=incremental_state,
-        ) if self.relative_attn else None
 
         # extended attention mask
         source_padding_mask = encoder_out['encoder_padding_mask']
         target_padding_mask = source_padding_mask.new_zeros((bsz, tgt_len))
         padding_mask = torch.cat((source_padding_mask, target_padding_mask), 1)
+
+        # Compute relative attention bias
+        pos_seq = make_positions(
+            encoder_out['src_tokens'],
+            prev_output_tokens,
+            self.padding_idx,
+            self.no_shift_target_pos)
+        self_attn_bias = self.rel_attn_encoding(
+            tmp,
+            pos_seq=pos_seq,
+            incremental_state=incremental_state,
+        ) if self.relative_attn else None
+
         if incremental_state is None:
             #no incremental forward, used in training and validation
             attn_mask = source.new_zeros(seq_len, seq_len)
@@ -358,7 +374,8 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
             src_to_tgt_mask = utils.fill_with_neg_inf(source.new(source.size(0), tgt_len))
             attn_mask[:-tgt_len, -tgt_len:] = src_to_tgt_mask
             x = torch.cat([source, x], axis=0)
-            x = self.tfm_forward(x,
+            x = self.tfm_forward(
+                x,
                 attn_mask=attn_mask,
                 padding_mask=padding_mask,
                 self_attn_bias=self_attn_bias)
@@ -375,7 +392,8 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
                     self_attn_bias=source_attn_bias,
                     incremental_state=incremental_state)
             key_padding_mask = prev_output_tokens[:, -1:].eq(self.padding_idx)
-            x = self.tfm_forward(x,
+            x = self.tfm_forward(
+                x,
                 padding_mask=key_padding_mask,
                 incremental_state=incremental_state,
                 self_attn_bias=self_attn_bias)
@@ -456,6 +474,21 @@ class JointAttentionDecoder(FairseqIncrementalDecoder):
             self._future_mask = torch.triu(utils.fill_with_neg_inf(self._future_mask.resize_(dim, dim)), 1)
         return self._future_mask[:dim, :dim]
 
+def make_positions(src, tgt, padding_idx, no_shift):
+    if no_shift:
+        mask = src.ne(padding_idx).int()
+        src_pos_seq = (
+            (torch.cumsum(mask, dim=1) - 1).type_as(mask) * mask).long()
+        mask = tgt.ne(padding_idx).int()
+        tgt_pos_seq = (
+            (torch.cumsum(mask, dim=1) - 1).type_as(mask) * mask).long()
+        pos_seq = torch.cat([src_pos_seq, tgt_pos_seq], 1)
+    else:
+        tensor = torch.cat([src, tgt], 1)
+        mask = tensor.ne(padding_idx).int()
+        pos_seq = (
+            (torch.cumsum(mask, dim=1) - 1).type_as(mask) * mask).long()
+    return pos_seq
 
 def Embedding(num_embeddings, embedding_dim, padding_idx):
     m = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)

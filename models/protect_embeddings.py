@@ -237,10 +237,7 @@ class RelativeSinusoidalPositionalEncoding(nn.Module):
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
 
-    def forward(self, input, incremental_state=None, timestep=None, **kwargs):
-        """Input is expected to be of size [bsz x seqlen]."""
-        #bsz, seq_len = torch.onnx.operators.shape_as_tensor(input)
-        bsz, seq_len = input.size(0), input.size(1)
+    def consecutive_rel_encoding(self, bsz, seq_len):
         if self.weights is None or seq_len > self.max_size:
             # recompute/expand embeddings if needed
             self.weights = RelativeSinusoidalPositionalEncoding.get_embedding(
@@ -249,19 +246,42 @@ class RelativeSinusoidalPositionalEncoding(nn.Module):
             )
             self.max_size = seq_len
         self.weights = self.weights.to(self.pos_vec)
+        pos_enc = self.weights[self.max_size-seq_len:self.max_size+seq_len]
+        pos_enc = pos_enc.detach()
+        attn_bias = torch.einsum("nd,td->nt", self.pos_vec, pos_enc)
+        attn_bias = attn_bias[:, None, :].repeat(1, seq_len, 1)
+        attn_bias = RelativeSinusoidalPositionalEncoding.rel_shift(
+                attn_bias, row_dim=-2, key_len=seq_len)
+        return attn_bias.unsqueeze(0).expand(bsz, *attn_bias.size())
 
-        if incremental_state is not None:
-            pos_enc = self.weights[self.max_size-seq_len+1:self.max_size+1]
-            pos_enc = pos_enc.detach()
-            attn_bias = torch.einsum("nd,td->nt", self.pos_vec, pos_enc)
-            attn_bias = attn_bias[:, None, :]
+    def rel_encoding(self, pos_q, pos_k, bsz, seq_len):
+        device = pos_q.device
+        dist_mat = pos_q.unsqueeze(-1) - pos_k.unsqueeze(-2)
+        dist_mat = dist_mat.float()
+        freq_seq = torch.arange(0, self.embedding_dim, 2.0, device=device)
+        inv_freq = 1 / (10000 ** (freq_seq / self.embedding_dim))
+
+        sinusoid_inp = torch.einsum("bij,d->bijd", dist_mat, inv_freq)
+        pos_enc = torch.cat([torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)], -1)
+        attn_bias = torch.einsum("nd,bijd->bnij", self.pos_vec, pos_enc)
+
+        return attn_bias
+
+    def forward(
+        self,
+        input,
+        incremental_state=None,
+        timestep=None,
+        pos_seq=None,
+        **kwargs):
+        """Input is expected to be of size [bsz x seqlen]."""
+        bsz, seq_len = input.size(0), input.size(1)
+        if pos_seq is None:
+            attn_bias = self.consecutive_rel_encoding(bsz, seq_len)
         else:
-            pos_enc = self.weights[self.max_size-seq_len:self.max_size+seq_len]
-            pos_enc = pos_enc.detach()
-            attn_bias = torch.einsum("nd,td->nt", self.pos_vec, pos_enc)
-            attn_bias = attn_bias[:, None, :].repeat(1, seq_len, 1)
-            attn_bias = RelativeSinusoidalPositionalEncoding.rel_shift(
-                 attn_bias, row_dim=-2, key_len=seq_len)
+            attn_bias = self.rel_encoding(pos_seq, pos_seq, bsz, seq_len)
+        if incremental_state is not None:
+            attn_bias = attn_bias[:, :, -1:, :]
 
         return attn_bias
 

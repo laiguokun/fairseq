@@ -237,9 +237,6 @@ class MultiheadAttention(nn.Module):
         # Add attention bias before masking
         if attn_bias is not None:
             attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_bias = attn_bias.unsqueeze(0)
-            if self.onnx_trace:
-                attn_bias = attn_bias.repeat(attn_weights.size(0), 1, 1, 1)
             attn_weights += attn_bias * self.scaling
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
