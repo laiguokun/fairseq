@@ -155,8 +155,15 @@ class TranslationTask(FairseqTask):
         Args:
             args (argparse.Namespace): parsed command-line arguments
         """
-        args.left_pad_source = options.eval_bool(args.left_pad_source)
-        args.left_pad_target = options.eval_bool(args.left_pad_target)
+        if not hasattr(args, 'left_pad_source'):
+            args.left_pad_source = True
+        else:
+            args.left_pad_source = options.eval_bool(args.left_pad_source)
+        if not hasattr(args, 'left_pad_target'):
+            args.left_pad_target = False
+        else:
+            args.left_pad_target = options.eval_bool(args.left_pad_target)
+        args.left_pad_source
         if getattr(args, 'raw_text', False):
             utils.deprecation_warning('--raw-text is deprecated, please use --dataset-impl=raw')
             args.dataset_impl = 'raw'
@@ -195,6 +202,9 @@ class TranslationTask(FairseqTask):
 
         # infer langcode
         src, tgt = self.args.source_lang, self.args.target_lang
+        
+        if not hasattr(self.args, 'load_alignments'):
+            self.args.load_alignments = False
 
         self.datasets[split] = load_langpair_dataset(
             data_path, split, src, self.src_dict, tgt, self.tgt_dict,

@@ -306,7 +306,10 @@ class TransformerEncoder(FairseqEncoder):
             self.layer_norm = LayerNorm(embed_dim)
         else:
             self.layer_norm = None
-        
+            
+        if not hasattr(args, 'language_embedding'):
+            args.language_embedding = False
+            
         if args.language_embedding:
             self.embed_language = LanguageEmbedding(embed_dim) 
         else:
@@ -506,7 +509,10 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             self.embed_language = LanguageEmbedding(embed_dim) 
         else:
             self.embed_language = None
-
+            
+        if not hasattr(args, 'softmax_bias'):
+            args.softmax_bias = False
+            
         if args.softmax_bias:
             self.softmax_bias = nn.Parameter(torch.Tensor(len(dictionary),))
         else:
